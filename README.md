@@ -1,0 +1,2 @@
+# trading-buddy
+automated daytrader
