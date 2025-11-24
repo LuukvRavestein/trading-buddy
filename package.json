@@ -1,0 +1,17 @@
+{
+  "name": "trading-buddy",
+  "version": "0.1.0",
+  "description": "Bitcoin daytrading bot backend for TradingView, Deribit, and Vercel.",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "test": "echo \"No tests yet\""
+  },
+  "keywords": [
+    "vercel",
+    "trading",
+    "deribit",
+    "tradingview"
+  ]
+}
+
