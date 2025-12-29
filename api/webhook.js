@@ -227,6 +227,7 @@ export default async function handler(req, res) {
         amount: tradeResult.trade?.amount || 0,
         positionSizeUsd: tradeResult.trade?.positionSizeUsd || 0,
         riskCheck: tradeResult.riskCheck || tradeResult.trade?.riskCheck,
+        aiCheck: tradeResult.aiCheck || undefined,
         orderId: tradeResult.deribitOrder?.order_id,
         processingTimeMs: processingTime,
         requestId,

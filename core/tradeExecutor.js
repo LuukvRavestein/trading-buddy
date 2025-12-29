@@ -13,6 +13,7 @@
 
 import { canOpenNewTrade, validateTradeSignal, calculatePositionSize } from './riskEngine.js';
 import { getAccountSummary, placeOrder, getOpenPositions, getCurrentPrice } from '../utils/deribitClient.js';
+import { evaluateTradeProposal } from './aiCheck.js';
 
 /**
  * Convert USD position size to Deribit contracts
@@ -167,6 +168,69 @@ export async function executeTrade(signal, options = {}) {
       };
     }
 
+    // Step 4.5: AI Quality Check (optional)
+    let aiCheck = null;
+    const enableAICheck = process.env.ENABLE_AI_CHECK === 'true';
+    
+    if (enableAICheck) {
+      try {
+        // Get current trend from signal if available, or use 'NEUTRAL'
+        const currentTrend = signal.trend || 'NEUTRAL';
+        
+        aiCheck = await evaluateTradeProposal({
+          signal: signal.signal,
+          symbol: signal.symbol,
+          entryPrice: signal.entry_price,
+          stopLoss: signal.sl_price,
+          takeProfit: signal.tp_price,
+          trend: currentTrend,
+          positionSizeUsd,
+          riskCheck: {
+            slDistancePercent: riskCheck.slDistancePercent,
+            riskReward: riskCheck.riskReward,
+          },
+          equity,
+        });
+
+        // If AI rejects the trade, return rejection
+        if (!aiCheck.allow_trade) {
+          return {
+            success: false,
+            action: 'rejected',
+            reason: `AI check rejected: ${aiCheck.reason}`,
+            mode: botMode,
+            riskCheck: {
+              slDistancePercent: riskCheck.slDistancePercent,
+              riskReward: riskCheck.riskReward,
+            },
+            aiCheck: {
+              enabled: true,
+              confidence: aiCheck.confidence,
+              reason: aiCheck.reason,
+            },
+          };
+        }
+
+        // If AI suggests different position size, use it (if reasonable)
+        if (aiCheck.position_size_usd && 
+            aiCheck.position_size_usd !== positionSizeUsd &&
+            aiCheck.position_size_usd > 0 &&
+            aiCheck.position_size_usd <= positionSizeUsd * 1.5) { // Max 50% increase
+          console.log(`[tradeExecutor] AI suggested position size adjustment: $${positionSizeUsd} → $${aiCheck.position_size_usd}`);
+          // Note: We keep the original position size for now, but log the suggestion
+        }
+      } catch (error) {
+        console.error('[tradeExecutor] AI check error:', error);
+        // Continue with trade if AI check fails (fail-open)
+        aiCheck = {
+          enabled: true,
+          allow_trade: true,
+          reason: `AI check failed: ${error.message}. Trade allowed.`,
+          error: error.message,
+        };
+      }
+    }
+
     const side = signal.signal.toUpperCase() === 'LONG' ? 'buy' : 'sell';
 
     // Step 5: Execute trade (paper or live)
@@ -198,6 +262,7 @@ export async function executeTrade(signal, options = {}) {
         reason: 'Trade executed in paper mode (logged only)',
         mode: 'paper',
         trade: paperTrade,
+        aiCheck: aiCheck || undefined,
       };
     } else {
       // Live mode: place actual order
@@ -244,6 +309,7 @@ export async function executeTrade(signal, options = {}) {
           mode: 'live',
           trade: liveTrade,
           deribitOrder: orderResult,
+          aiCheck: aiCheck || undefined,
         };
       } catch (error) {
         return {
