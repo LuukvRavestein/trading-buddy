@@ -50,6 +50,7 @@ export async function saveTrade(trade) {
         amount: tradeWithId.amount,
         position_size_usd: tradeWithId.positionSizeUsd,
         risk_check: tradeWithId.riskCheck,
+        ai_check: tradeWithId.aiCheck, // Include AI check data
         order_id: tradeWithId.orderId,
         processing_time_ms: tradeWithId.processingTimeMs,
         request_id: tradeWithId.requestId,
