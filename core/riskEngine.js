@@ -146,9 +146,25 @@ export function canOpenNewTrade(context) {
   // Check 3: Stop loss distance validation
   const slDistance = calculateSLDistance(entryPrice, stopLossPrice);
   if (slDistance > maxSLDistancePercent) {
+    // Calculate position size for display purposes even when rejected
+    let positionSizeUsd = 0;
+    try {
+      positionSizeUsd = calculatePositionSize({
+        equity,
+        riskPercent: maxRiskPercent,
+        entryPrice,
+        stopLossPrice,
+      });
+    } catch (e) {
+      // Ignore calculation errors
+    }
+    
     return {
       allowed: false,
       reason: `Stop loss distance too large: ${slDistance.toFixed(2)}% (max: ${maxSLDistancePercent}%)`,
+      positionSizeUsd: Math.round(positionSizeUsd * 100) / 100,
+      slDistancePercent: Math.round(slDistance * 100) / 100,
+      riskReward: takeProfitPrice ? calculateRiskReward(entryPrice, stopLossPrice, takeProfitPrice) : null,
     };
   }
 
@@ -156,9 +172,25 @@ export function canOpenNewTrade(context) {
   if (takeProfitPrice) {
     const rr = calculateRiskReward(entryPrice, stopLossPrice, takeProfitPrice);
     if (rr && rr < minRiskReward) {
+      // Calculate position size for display purposes even when rejected
+      let positionSizeUsd = 0;
+      try {
+        positionSizeUsd = calculatePositionSize({
+          equity,
+          riskPercent: maxRiskPercent,
+          entryPrice,
+          stopLossPrice,
+        });
+      } catch (e) {
+        // Ignore calculation errors
+      }
+      
       return {
         allowed: false,
         reason: `Risk:Reward ratio too low: 1:${rr.toFixed(2)} (min: 1:${minRiskReward})`,
+        positionSizeUsd: Math.round(positionSizeUsd * 100) / 100,
+        slDistancePercent: Math.round(slDistance * 100) / 100,
+        riskReward: rr,
       };
     }
   }
@@ -172,13 +204,15 @@ export function canOpenNewTrade(context) {
       stopLossPrice,
     });
 
-    // Additional check: position size should be at least 0.5% of equity (minimum reasonable trade)
-    // For $100 account: min $0.50, for $10,000 account: min $50
-    const minPositionSize = equity * 0.005; // 0.5% of equity
-    if (positionSizeUsd < minPositionSize) {
+    // Additional check: position size should be at least $0.10 (very low minimum for small accounts)
+    // For $100 account with 1% risk and 0.5% SL: position size ~$2, which is well above $0.10
+    if (positionSizeUsd < 0.10) {
       return {
         allowed: false,
-        reason: `Calculated position size too small: $${positionSizeUsd.toFixed(2)} (min: $${minPositionSize.toFixed(2)})`,
+        reason: `Calculated position size too small: $${positionSizeUsd.toFixed(2)} (min: $0.10)`,
+        positionSizeUsd: Math.round(positionSizeUsd * 100) / 100, // Include position size even when rejected
+        slDistancePercent: Math.round(slDistance * 100) / 100,
+        riskReward: takeProfitPrice ? calculateRiskReward(entryPrice, stopLossPrice, takeProfitPrice) : null,
       };
     }
 
