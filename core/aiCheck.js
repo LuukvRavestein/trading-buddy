@@ -148,7 +148,15 @@ function buildEvaluationPrompt(tradeData) {
     (takeProfit ? Math.abs(takeProfit - entryPrice) / Math.abs(entryPrice - stopLoss) : null);
   const riskPercent = (positionSizeUsd / equity) * 100;
 
+  // Determine if this is a small test account
+  const isSmallAccount = equity < 1000;
+  const accountContext = isSmallAccount 
+    ? `NOTE: This is a small test account ($${equity.toFixed(2)}). Position sizes are proportionally smaller.`
+    : '';
+
   return `Analyze this Bitcoin trading proposal and provide your assessment.
+
+${accountContext}
 
 TRADE PROPOSAL:
 - Signal: ${signal}
@@ -160,6 +168,8 @@ TRADE PROPOSAL:
 - Position Size: $${positionSizeUsd.toFixed(2)} (${riskPercent.toFixed(2)}% of equity)
 - Account Equity: $${equity.toFixed(2)}
 - Market Trend: ${trend || 'Unknown'}
+
+${isSmallAccount ? 'IMPORTANT: For small test accounts, position sizes are proportionally smaller. This is normal and acceptable for testing purposes.' : ''}
 
 Please provide your analysis in JSON format with the following structure:
 {
