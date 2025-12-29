@@ -172,11 +172,13 @@ export function canOpenNewTrade(context) {
       stopLossPrice,
     });
 
-    // Additional check: position size should be at least $10 (minimum reasonable trade)
-    if (positionSizeUsd < 10) {
+    // Additional check: position size should be at least 0.5% of equity (minimum reasonable trade)
+    // For $100 account: min $0.50, for $10,000 account: min $50
+    const minPositionSize = equity * 0.005; // 0.5% of equity
+    if (positionSizeUsd < minPositionSize) {
       return {
         allowed: false,
-        reason: `Calculated position size too small: $${positionSizeUsd.toFixed(2)} (min: $10)`,
+        reason: `Calculated position size too small: $${positionSizeUsd.toFixed(2)} (min: $${minPositionSize.toFixed(2)})`,
       };
     }
 
