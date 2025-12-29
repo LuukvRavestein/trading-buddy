@@ -522,10 +522,11 @@ const dashboardHTML = `<!DOCTYPE html>
         
         // AI Check column
         const aiCheck = trade.aiCheck;
+        let confidenceClass = 'ai-confidence-medium';
+        let confidenceText = '-';
+        
         if (aiCheck && aiCheck.enabled) {
           const confidence = aiCheck.confidence;
-          let confidenceClass = 'ai-confidence-medium';
-          let confidenceText = '-';
           
           if (confidence !== null && confidence !== undefined) {
             confidenceText = (confidence * 100).toFixed(0) + '%';
