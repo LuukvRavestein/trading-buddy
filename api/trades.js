@@ -6,6 +6,59 @@
 
 import { getTrades, getStats } from '../utils/tradeStore.js';
 
+/**
+ * Calculate P&L for a trade
+ * For paper trades, we calculate based on entry vs TP (if successful) or SL (if rejected)
+ * In a real scenario, you'd use current market price or actual exit price
+ * 
+ * @param {object} trade - Trade object
+ * @returns {number} P&L in USD
+ */
+function calculatePnL(trade) {
+  if (!trade.entryPrice || !trade.positionSizeUsd) {
+    return 0;
+  }
+
+  const entryPrice = parseFloat(trade.entryPrice);
+  const positionSize = parseFloat(trade.positionSizeUsd);
+  
+  if (!entryPrice || !positionSize || entryPrice <= 0) {
+    return 0;
+  }
+
+  // Determine exit price based on trade success
+  // Successful trades: assume closed at TP (profit)
+  // Rejected/failed trades: assume closed at SL (loss)
+  let exitPrice = null;
+  
+  if (trade.success !== false && trade.takeProfit) {
+    // Successful trade: closed at TP
+    exitPrice = parseFloat(trade.takeProfit);
+  } else if (trade.stopLoss) {
+    // Failed/rejected trade: closed at SL
+    exitPrice = parseFloat(trade.stopLoss);
+  } else if (trade.takeProfit) {
+    // Fallback: use TP if available
+    exitPrice = parseFloat(trade.takeProfit);
+  }
+
+  if (!exitPrice || exitPrice <= 0) {
+    return 0; // No exit price available
+  }
+
+  // Calculate P&L based on signal direction
+  let pnl = 0;
+  if (trade.signal === 'LONG') {
+    // LONG: profit if exit > entry, loss if exit < entry
+    pnl = ((exitPrice - entryPrice) / entryPrice) * positionSize;
+  } else if (trade.signal === 'SHORT') {
+    // SHORT: profit if exit < entry, loss if exit > entry
+    pnl = ((entryPrice - exitPrice) / entryPrice) * positionSize;
+  }
+
+  return Math.round(pnl * 100) / 100; // Round to 2 decimals
+}
+
 export default async function handler(req, res) {
   // Allow GET requests only
   if (req.method !== 'GET') {
@@ -25,14 +78,26 @@ export default async function handler(req, res) {
       limit: limit ? parseInt(limit) : undefined,
     });
 
+    // Calculate P&L for each trade
+    const tradesWithPnL = trades.map(trade => ({
+      ...trade,
+      pnl: calculatePnL(trade),
+    }));
+
+    // Calculate total P&L
+    const totalPnL = tradesWithPnL.reduce((sum, trade) => sum + (trade.pnl || 0), 0);
+
     // Get statistics
     const stats = await getStats();
+    
+    // Add total P&L to stats
+    stats.totalPnL = Math.round(totalPnL * 100) / 100;
 
     return res.status(200).json({
       status: 'ok',
       stats,
-      trades,
-      count: trades.length,
+      trades: tradesWithPnL,
+      count: tradesWithPnL.length,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

@@ -106,9 +106,9 @@ export async function executeTrade(signal, options = {}) {
       if (isPaperMode) {
         console.warn('[tradeExecutor] Using mock account (Deribit not available)');
         accountSummary = {
-          equity: 10000,
-          balance: 10000,
-          available_funds: 10000,
+          equity: 100,
+          balance: 100,
+          available_funds: 100,
         };
       } else {
         return {

@@ -173,9 +173,9 @@ export default async function handler(req, res) {
       if (isPaperMode) {
         console.warn('[webhook] Using mock account state (Deribit not available)');
         accountState = {
-          equity: 10000, // Mock $10,000 account
-          balance: 10000,
-          availableFunds: 10000,
+          equity: 100, // Mock $100 account
+          balance: 100,
+          availableFunds: 100,
           dailyPnL: 0,
           tradesToday: 0,
           openPositions: 0,

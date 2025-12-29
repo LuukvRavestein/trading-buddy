@@ -245,6 +245,20 @@ const dashboardHTML = `<!DOCTYPE html>
       color: #6b7280;
       font-size: 0.85em;
     }
+    
+    .pnl-positive {
+      color: #10b981;
+      font-weight: 600;
+    }
+    
+    .pnl-negative {
+      color: #ef4444;
+      font-weight: 600;
+    }
+    
+    .pnl-zero {
+      color: #9ca3af;
+    }
   </style>
 </head>
 <body>
@@ -281,6 +295,11 @@ const dashboardHTML = `<!DOCTYPE html>
       <div class="stat-card">
         <div class="stat-label">Short Signals</div>
         <div class="stat-value" id="stat-short">-</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Total P&L</div>
+        <div class="stat-value" id="stat-pnl">-</div>
+        <div class="stat-subvalue" id="stat-pnl-detail">-</div>
       </div>
     </div>
     
@@ -340,6 +359,17 @@ const dashboardHTML = `<!DOCTYPE html>
         \`\${stats.successful} successful / \${stats.rejected} rejected\`;
       document.getElementById('stat-long').textContent = stats.long || 0;
       document.getElementById('stat-short').textContent = stats.short || 0;
+      
+      // Update P&L
+      const totalPnL = stats.totalPnL || 0;
+      const pnlElement = document.getElementById('stat-pnl');
+      const pnlDetailElement = document.getElementById('stat-pnl-detail');
+      
+      pnlElement.textContent = formatPrice(totalPnL);
+      pnlElement.className = 'stat-value ' + (totalPnL > 0 ? 'pnl-positive' : totalPnL < 0 ? 'pnl-negative' : 'pnl-zero');
+      
+      const accountValue = 100 + totalPnL; // Starting with $100
+      pnlDetailElement.textContent = \`Account: \${formatPrice(accountValue)}\`;
     }
     
     function renderTrades(trades) {
@@ -360,6 +390,7 @@ const dashboardHTML = `<!DOCTYPE html>
       html += '<th>Stop Loss</th>';
       html += '<th>Take Profit</th>';
       html += '<th>Size (USD)</th>';
+      html += '<th>P&L</th>';
       html += '<th>R:R</th>';
       html += '<th>Status</th>';
       html += '</tr></thead><tbody>';
@@ -380,6 +411,12 @@ const dashboardHTML = `<!DOCTYPE html>
         html += \`<td class="price">\${formatPrice(trade.stopLoss)}</td>\`;
         html += \`<td class="price">\${formatPrice(trade.takeProfit)}</td>\`;
         html += \`<td class="price">\${formatPrice(trade.positionSizeUsd)}</td>\`;
+        
+        // P&L column
+        const pnl = trade.pnl || 0;
+        const pnlClass = pnl > 0 ? 'pnl-positive' : pnl < 0 ? 'pnl-negative' : 'pnl-zero';
+        html += \`<td class="price \${pnlClass}">\${formatPrice(pnl)}</td>\`;
+        
         html += \`<td>\${rr}</td>\`;
         html += \`<td><span class="badge \${successClass}">\${trade.action || 'N/A'}</span></td>\`;
         html += '</tr>';
