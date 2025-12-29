@@ -231,7 +231,7 @@ export default async function handler(req, res) {
         processingTimeMs: processingTime,
         requestId,
       };
-      saveTrade(tradeToSave);
+      await saveTrade(tradeToSave);
     } catch (error) {
       console.error(`[webhook] [${requestId}] Failed to save trade:`, error);
     }

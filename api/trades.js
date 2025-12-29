@@ -19,14 +19,14 @@ export default async function handler(req, res) {
     const { mode, signal, limit } = req.query;
 
     // Get trades with filters
-    const trades = getTrades({
+    const trades = await getTrades({
       mode: mode || undefined,
       signal: signal || undefined,
       limit: limit ? parseInt(limit) : undefined,
     });
 
     // Get statistics
-    const stats = getStats();
+    const stats = await getStats();
 
     return res.status(200).json({
       status: 'ok',

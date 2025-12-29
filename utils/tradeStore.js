@@ -1,26 +1,71 @@
 /**
  * Trade Store
  * 
- * Simple in-memory store for trades.
- * In production, you might want to use a database (Supabase, MongoDB, etc.)
+ * Stores trades in Supabase database (if configured) or falls back to in-memory storage.
+ * 
+ * Environment variables:
+ * - SUPABASE_URL
+ * - SUPABASE_ANON_KEY (or SUPABASE_SERVICE_ROLE_KEY)
  */
 
-// In-memory store (resets on serverless function restart)
+import { 
+  isSupabaseConfigured, 
+  insertTrade as insertTradeToSupabase,
+  getTradesFromSupabase,
+  getStatsFromSupabase,
+} from './supabaseClient.js';
+
+// In-memory store (fallback, resets on serverless function restart)
 let trades = [];
 
 /**
  * Save a trade to the store
  * 
  * @param {object} trade - Trade object
- * @returns {object} Saved trade with ID and timestamp
+ * @returns {Promise<object>} Saved trade with ID and timestamp
  */
-export function saveTrade(trade) {
+export async function saveTrade(trade) {
   const tradeWithId = {
     id: `trade-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     timestamp: new Date().toISOString(),
     ...trade,
   };
 
+  // Try to save to Supabase first
+  if (isSupabaseConfigured()) {
+    try {
+      // Map trade fields to database schema
+      const dbTrade = {
+        success: tradeWithId.success,
+        action: tradeWithId.action,
+        reason: tradeWithId.reason,
+        mode: tradeWithId.mode,
+        signal: tradeWithId.signal,
+        symbol: tradeWithId.symbol,
+        instrument: tradeWithId.instrument || tradeWithId.symbol,
+        entry_price: tradeWithId.entryPrice,
+        stop_loss: tradeWithId.stopLoss,
+        take_profit: tradeWithId.takeProfit,
+        side: tradeWithId.side,
+        amount: tradeWithId.amount,
+        position_size_usd: tradeWithId.positionSizeUsd,
+        risk_check: tradeWithId.riskCheck,
+        order_id: tradeWithId.orderId,
+        processing_time_ms: tradeWithId.processingTimeMs,
+        request_id: tradeWithId.requestId,
+      };
+
+      const saved = await insertTradeToSupabase(dbTrade);
+      if (saved) {
+        return { ...tradeWithId, id: saved.id || tradeWithId.id };
+      }
+    } catch (error) {
+      console.error('[tradeStore] Failed to save to Supabase, using in-memory fallback:', error);
+      // Fall through to in-memory storage
+    }
+  }
+
+  // Fallback to in-memory storage
   trades.unshift(tradeWithId); // Add to beginning of array
 
   // Keep only last 1000 trades (prevent memory issues)
@@ -38,9 +83,42 @@ export function saveTrade(trade) {
  * @param {number} [options.limit] - Maximum number of trades to return
  * @param {string} [options.mode] - Filter by mode (paper/live)
  * @param {string} [options.signal] - Filter by signal (LONG/SHORT)
- * @returns {array} Array of trades
+ * @returns {Promise<array>} Array of trades
  */
-export function getTrades(options = {}) {
+export async function getTrades(options = {}) {
+  // Try to get from Supabase first
+  if (isSupabaseConfigured()) {
+    try {
+      const dbTrades = await getTradesFromSupabase(options);
+      // Map database fields back to trade format
+      return dbTrades.map(t => ({
+        id: t.id,
+        timestamp: t.timestamp || t.created_at,
+        success: t.success,
+        action: t.action,
+        reason: t.reason,
+        mode: t.mode,
+        signal: t.signal,
+        symbol: t.symbol,
+        instrument: t.instrument,
+        entryPrice: parseFloat(t.entry_price) || t.entry_price,
+        stopLoss: parseFloat(t.stop_loss) || t.stop_loss,
+        takeProfit: parseFloat(t.take_profit) || t.take_profit,
+        side: t.side,
+        amount: t.amount,
+        positionSizeUsd: parseFloat(t.position_size_usd) || t.position_size_usd,
+        riskCheck: t.risk_check,
+        orderId: t.order_id,
+        processingTimeMs: t.processing_time_ms,
+        requestId: t.request_id,
+      }));
+    } catch (error) {
+      console.error('[tradeStore] Failed to get from Supabase, using in-memory fallback:', error);
+      // Fall through to in-memory storage
+    }
+  }
+
+  // Fallback to in-memory storage
   let filteredTrades = [...trades];
 
   // Filter by mode
@@ -64,14 +142,28 @@ export function getTrades(options = {}) {
 /**
  * Get trade statistics
  * 
- * @returns {object} Statistics
+ * @returns {Promise<object>} Statistics
  */
-export function getStats() {
-  const allTrades = getTrades();
-  const paperTrades = getTrades({ mode: 'paper' });
-  const liveTrades = getTrades({ mode: 'live' });
-  const longTrades = getTrades({ signal: 'LONG' });
-  const shortTrades = getTrades({ signal: 'SHORT' });
+export async function getStats() {
+  // Try to get from Supabase first
+  if (isSupabaseConfigured()) {
+    try {
+      const stats = await getStatsFromSupabase();
+      if (stats) {
+        return stats;
+      }
+    } catch (error) {
+      console.error('[tradeStore] Failed to get stats from Supabase, using in-memory fallback:', error);
+      // Fall through to in-memory calculation
+    }
+  }
+
+  // Fallback to in-memory calculation
+  const allTrades = await getTrades();
+  const paperTrades = await getTrades({ mode: 'paper' });
+  const liveTrades = await getTrades({ mode: 'live' });
+  const longTrades = await getTrades({ signal: 'LONG' });
+  const shortTrades = await getTrades({ signal: 'SHORT' });
 
   const successful = allTrades.filter(t => t.success !== false).length;
   const rejected = allTrades.filter(t => t.success === false).length;
@@ -91,9 +183,10 @@ export function getStats() {
 /**
  * Get latest trade
  * 
- * @returns {object|null} Latest trade or null
+ * @returns {Promise<object|null>} Latest trade or null
  */
-export function getLatestTrade() {
-  return trades.length > 0 ? trades[0] : null;
+export async function getLatestTrade() {
+  const latestTrades = await getTrades({ limit: 1 });
+  return latestTrades.length > 0 ? latestTrades[0] : null;
 }
 
