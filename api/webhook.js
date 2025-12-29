@@ -82,14 +82,24 @@ export default async function handler(req, res) {
   }
 
   const startTime = Date.now();
+  const requestId = `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+  console.log(`[webhook] [${requestId}] New request received - Method: ${req.method}, Headers:`, {
+    'content-type': req.headers['content-type'],
+    'user-agent': req.headers['user-agent'],
+    origin: req.headers.origin,
+  });
 
   try {
     // Parse payload
     let payload;
     try {
       payload = parsePayload(req.body);
+      console.log(`[webhook] [${requestId}] Raw body type:`, typeof req.body);
+      console.log(`[webhook] [${requestId}] Raw body preview:`, 
+        typeof req.body === 'string' ? req.body.substring(0, 200) : 'object');
     } catch (error) {
-      console.error('[webhook] Payload parsing error:', error);
+      console.error(`[webhook] [${requestId}] Payload parsing error:`, error);
       return res.status(400).json({
         status: 'error',
         action: 'rejected',
@@ -101,7 +111,7 @@ export default async function handler(req, res) {
     const logPayload = { ...payload };
     if (logPayload.secret) delete logPayload.secret;
     if (logPayload.webhook_secret) delete logPayload.webhook_secret;
-    console.log('[webhook] Received payload:', JSON.stringify(logPayload));
+    console.log(`[webhook] [${requestId}] Parsed payload:`, JSON.stringify(logPayload, null, 2));
 
     // Validate webhook secret
     if (!validateWebhookSecret(payload)) {
@@ -189,11 +199,14 @@ export default async function handler(req, res) {
 
     // Log result
     const processingTime = Date.now() - startTime;
-    console.log(`[webhook] Trade execution result (${processingTime}ms):`, {
+    console.log(`[webhook] [${requestId}] Trade execution result (${processingTime}ms):`, {
       success: tradeResult.success,
       action: tradeResult.action,
       reason: tradeResult.reason,
       mode: tradeResult.mode,
+      signal: signal.signal,
+      symbol: signal.symbol,
+      entryPrice: signal.entry_price,
     });
 
     // Return response
@@ -243,7 +256,8 @@ export default async function handler(req, res) {
 
   } catch (error) {
     const processingTime = Date.now() - startTime;
-    console.error('[webhook] Unexpected error:', error);
+    console.error(`[webhook] [${requestId}] Unexpected error:`, error);
+    console.error(`[webhook] [${requestId}] Error stack:`, error.stack);
     
     return res.status(500).json({
       status: 'error',
@@ -251,6 +265,7 @@ export default async function handler(req, res) {
       reason: `Unexpected server error: ${error.message}`,
       timestamp: new Date().toISOString(),
       processing_time_ms: processingTime,
+      request_id: requestId,
     });
   }
 }
