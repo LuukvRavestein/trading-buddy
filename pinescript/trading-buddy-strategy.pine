@@ -102,42 +102,52 @@ float slPrice = na
 float tpPrice = na
 
 // LONG signal: retest of demand zone in uptrend
-// Check last 3 demand zones for retest (more flexible)
+// Check last 3 demand zones for retest (balanced approach)
 if currentTrend == "UP" and array.size(demandZones) > 0
     // Check most recent zone
     demandLevel = array.get(demandZones, array.size(demandZones) - 1)
-    tolerance = demandLevel * 0.002 // Increased tolerance to 0.2% for better detection
+    tolerance = demandLevel * 0.003 // 0.3% tolerance (balanced)
     
     // Also check 2nd and 3rd most recent zones
     demandLevel2 = array.size(demandZones) >= 2 ? array.get(demandZones, array.size(demandZones) - 2) : na
     demandLevel3 = array.size(demandZones) >= 3 ? array.get(demandZones, array.size(demandZones) - 3) : na
     
+    // Check if price touches zone (using low, close, or high)
     retest1 = entryLow <= demandLevel + tolerance and entryLow >= demandLevel - tolerance
-    retest2 = not na(demandLevel2) and entryLow <= demandLevel2 + tolerance and entryLow >= demandLevel2 - tolerance
-    retest3 = not na(demandLevel3) and entryLow <= demandLevel3 + tolerance and entryLow >= demandLevel3 - tolerance
+    retest1b = entryClose <= demandLevel + tolerance and entryClose >= demandLevel - tolerance
+    retest1c = entryHigh <= demandLevel + tolerance and entryHigh >= demandLevel - tolerance
     
-    if retest1 or retest2 or retest3
+    retest2 = not na(demandLevel2) and (entryLow <= demandLevel2 + tolerance and entryLow >= demandLevel2 - tolerance or entryClose <= demandLevel2 + tolerance and entryClose >= demandLevel2 - tolerance or entryHigh <= demandLevel2 + tolerance and entryHigh >= demandLevel2 - tolerance)
+    
+    retest3 = not na(demandLevel3) and (entryLow <= demandLevel3 + tolerance and entryLow >= demandLevel3 - tolerance or entryClose <= demandLevel3 + tolerance and entryClose >= demandLevel3 - tolerance or entryHigh <= demandLevel3 + tolerance and entryHigh >= demandLevel3 - tolerance)
+    
+    if retest1 or retest1b or retest1c or retest2 or retest3
         longSignal := true
         entryPrice := entryClose
         slPrice := entryPrice * (1 - stopLossPercent / 100)
         tpPrice := entryPrice * (1 + takeProfitPercent / 100)
 
 // SHORT signal: retest of supply zone in downtrend
-// Check last 3 supply zones for retest (more flexible)
+// Check last 3 supply zones for retest (balanced approach)
 if currentTrend == "DOWN" and array.size(supplyZones) > 0
     // Check most recent zone
     supplyLevel = array.get(supplyZones, array.size(supplyZones) - 1)
-    tolerance = supplyLevel * 0.002 // Increased tolerance to 0.2% for better detection
+    tolerance = supplyLevel * 0.003 // 0.3% tolerance (balanced)
     
     // Also check 2nd and 3rd most recent zones
     supplyLevel2 = array.size(supplyZones) >= 2 ? array.get(supplyZones, array.size(supplyZones) - 2) : na
     supplyLevel3 = array.size(supplyZones) >= 3 ? array.get(supplyZones, array.size(supplyZones) - 3) : na
     
+    // Check if price touches zone (using high, close, or low)
     retest1 = entryHigh >= supplyLevel - tolerance and entryHigh <= supplyLevel + tolerance
-    retest2 = not na(supplyLevel2) and entryHigh >= supplyLevel2 - tolerance and entryHigh <= supplyLevel2 + tolerance
-    retest3 = not na(supplyLevel3) and entryHigh >= supplyLevel3 - tolerance and entryHigh <= supplyLevel3 + tolerance
+    retest1b = entryClose >= supplyLevel - tolerance and entryClose <= supplyLevel + tolerance
+    retest1c = entryLow >= supplyLevel - tolerance and entryLow <= supplyLevel + tolerance
     
-    if retest1 or retest2 or retest3
+    retest2 = not na(supplyLevel2) and (entryHigh >= supplyLevel2 - tolerance and entryHigh <= supplyLevel2 + tolerance or entryClose >= supplyLevel2 - tolerance and entryClose <= supplyLevel2 + tolerance or entryLow >= supplyLevel2 - tolerance and entryLow <= supplyLevel2 + tolerance)
+    
+    retest3 = not na(supplyLevel3) and (entryHigh >= supplyLevel3 - tolerance and entryHigh <= supplyLevel3 + tolerance or entryClose >= supplyLevel3 - tolerance and entryClose <= supplyLevel3 + tolerance or entryLow >= supplyLevel3 - tolerance and entryLow <= supplyLevel3 + tolerance)
+    
+    if retest1 or retest1b or retest1c or retest2 or retest3
         shortSignal := true
         entryPrice := entryClose
         slPrice := entryPrice * (1 + stopLossPercent / 100)
@@ -209,9 +219,9 @@ if array.size(demandZones) > 0
     demandLevel = array.get(demandZones, array.size(demandZones) - 1)
     line.new(bar_index - 50, demandLevel, bar_index, demandLevel, color=color.new(color.green, 70), width=2, style=line.style_dashed, extend=extend.right)
 
-// --- TABLE INFO (optional) ---
+// --- TABLE INFO (with diagnostics) ---
 if barstate.islast
-    var table infoTable = table.new(position.top_right, 2, 6, bgcolor=color.new(color.white, 80), border_width=1)
+    var table infoTable = table.new(position.top_right, 2, 9, bgcolor=color.new(color.white, 80), border_width=1)
     table.cell(infoTable, 0, 0, "Trend", text_color=color.black)
     table.cell(infoTable, 1, 0, currentTrend, text_color=currentTrend == "UP" ? color.green : currentTrend == "DOWN" ? color.red : color.gray)
     table.cell(infoTable, 0, 1, "Entry TF", text_color=color.black)
@@ -224,4 +234,35 @@ if barstate.islast
     table.cell(infoTable, 1, 4, str.tostring(array.size(supplyZones)), text_color=color.red)
     table.cell(infoTable, 0, 5, "Demand Zones", text_color=color.black)
     table.cell(infoTable, 1, 5, str.tostring(array.size(demandZones)), text_color=color.green)
+    
+    // Diagnostic: Show distance to nearest zone
+    if currentTrend == "DOWN" and array.size(supplyZones) > 0
+        nearestSupply = array.get(supplyZones, array.size(supplyZones) - 1)
+        distanceToZone = math.abs(close - nearestSupply) / close * 100
+        table.cell(infoTable, 0, 6, "Dist to Supply", text_color=color.black)
+        table.cell(infoTable, 1, 6, str.tostring(distanceToZone, "#.##") + "%", text_color=distanceToZone <= 0.3 ? color.green : color.gray)
+    else if currentTrend == "UP" and array.size(demandZones) > 0
+        nearestDemand = array.get(demandZones, array.size(demandZones) - 1)
+        distanceToZone = math.abs(close - nearestDemand) / close * 100
+        table.cell(infoTable, 0, 6, "Dist to Demand", text_color=color.black)
+        table.cell(infoTable, 1, 6, str.tostring(distanceToZone, "#.##") + "%", text_color=distanceToZone <= 0.3 ? color.green : color.gray)
+    else
+        table.cell(infoTable, 0, 6, "Dist to Zone", text_color=color.black)
+        table.cell(infoTable, 1, 6, "N/A", text_color=color.gray)
+    
+    // Show if signal would be generated (before R:R check)
+    table.cell(infoTable, 0, 7, "Signal Ready", text_color=color.black)
+    signalReady = longSignal or shortSignal
+    table.cell(infoTable, 1, 7, signalReady ? "YES" : "NO", text_color=signalReady ? color.green : color.gray)
+    
+    // Show R:R if signal would be generated
+    if signalReady and not na(entryPrice) and not na(slPrice) and not na(tpPrice)
+        risk = math.abs(entryPrice - slPrice)
+        reward = math.abs(tpPrice - entryPrice)
+        rr = reward / risk
+        table.cell(infoTable, 0, 8, "R:R Ratio", text_color=color.black)
+        table.cell(infoTable, 1, 8, str.tostring(rr, "#.##"), text_color=rr >= minRiskReward ? color.green : color.red)
+    else
+        table.cell(infoTable, 0, 8, "R:R Ratio", text_color=color.black)
+        table.cell(infoTable, 1, 8, "-", text_color=color.gray)
 
