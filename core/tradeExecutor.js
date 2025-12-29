@@ -1,0 +1,289 @@
+/**
+ * Trade Executor
+ * 
+ * Orchestrates the execution of trades by:
+ * 1. Validating trade signals
+ * 2. Running risk checks
+ * 3. Calculating position sizes
+ * 4. Placing orders (paper mode or live mode)
+ * 
+ * Environment variables:
+ * - BOT_MODE: 'paper' or 'live' (default: 'paper')
+ */
+
+import { canOpenNewTrade, validateTradeSignal, calculatePositionSize } from './riskEngine.js';
+import { getAccountSummary, placeOrder, getOpenPositions, getCurrentPrice } from '../utils/deribitClient.js';
+
+/**
+ * Convert USD position size to Deribit contracts
+ * 
+ * For perpetuals: 1 contract = 1 USD (for BTC-PERPETUAL)
+ * For futures: depends on contract size
+ * 
+ * @param {number} positionSizeUsd - Position size in USD
+ * @param {string} instrumentName - Instrument name (e.g., 'BTC-PERPETUAL')
+ * @returns {number} Position size in contracts
+ */
+function convertUsdToContracts(positionSizeUsd, instrumentName) {
+  // For BTC-PERPETUAL, 1 contract = 1 USD
+  // For other instruments, this might need adjustment
+  // For now, we assume 1:1 for perpetuals
+  if (instrumentName.includes('PERPETUAL')) {
+    return Math.floor(positionSizeUsd); // Round down to whole contracts
+  }
+  
+  // For futures, might need different calculation
+  // Default: assume 1 contract = 1 USD (simplified)
+  return Math.floor(positionSizeUsd);
+}
+
+/**
+ * Convert Deribit instrument symbol to Deribit format
+ * TradingView might send 'BTCUSD' or 'BTC-PERPETUAL'
+ * 
+ * @param {string} symbol - Symbol from TradingView
+ * @returns {string} Deribit instrument name
+ */
+function normalizeInstrumentName(symbol) {
+  // If already in Deribit format, return as is
+  if (symbol.includes('-PERPETUAL') || symbol.includes('-')) {
+    return symbol;
+  }
+  
+  // Convert common formats
+  if (symbol.toUpperCase().includes('BTC')) {
+    return 'BTC-PERPETUAL';
+  }
+  
+  // Default: assume it's already correct or add -PERPETUAL
+  return symbol.includes('-') ? symbol : `${symbol}-PERPETUAL`;
+}
+
+/**
+ * Execute a trade based on TradingView signal
+ * 
+ * @param {object} signal - TradingView signal
+ * @param {string} signal.signal - 'LONG' or 'SHORT'
+ * @param {string} signal.symbol - Instrument symbol
+ * @param {number} signal.entry_price - Entry price
+ * @param {number} signal.sl_price - Stop loss price
+ * @param {number} [signal.tp_price] - Take profit price (optional)
+ * @param {object} [options] - Additional options
+ * @param {number} [options.currentDailyPnL] - Current daily P&L (default: 0)
+ * @param {number} [options.tradesToday] - Trades executed today (default: 0)
+ * @param {boolean} [options.useTestnet] - Use Deribit testnet (default: false)
+ * @returns {Promise<object>} Execution result
+ */
+export async function executeTrade(signal, options = {}) {
+  const {
+    currentDailyPnL = 0,
+    tradesToday = 0,
+    useTestnet = false,
+  } = options;
+
+  const botMode = (process.env.BOT_MODE || 'paper').toLowerCase();
+  const isPaperMode = botMode === 'paper';
+
+  try {
+    // Step 1: Validate signal structure
+    const signalValidation = validateTradeSignal(signal);
+    if (!signalValidation.valid) {
+      return {
+        success: false,
+        action: 'rejected',
+        reason: `Signal validation failed: ${signalValidation.reason}`,
+        mode: botMode,
+      };
+    }
+
+    // Step 2: Get account information
+    const currency = 'BTC'; // Default for BTC perpetuals
+    let accountSummary;
+    try {
+      accountSummary = await getAccountSummary(currency, useTestnet);
+    } catch (error) {
+      return {
+        success: false,
+        action: 'rejected',
+        reason: `Failed to get account summary: ${error.message}`,
+        mode: botMode,
+      };
+    }
+
+    const equity = accountSummary.equity || accountSummary.balance || 0;
+    if (equity <= 0) {
+      return {
+        success: false,
+        action: 'rejected',
+        reason: `Invalid equity: ${equity}`,
+        mode: botMode,
+      };
+    }
+
+    // Step 3: Run risk checks
+    const riskCheck = canOpenNewTrade({
+      equity,
+      entryPrice: signal.entry_price,
+      stopLossPrice: signal.sl_price,
+      takeProfitPrice: signal.tp_price,
+      currentDailyPnL,
+      tradesToday,
+    });
+
+    if (!riskCheck.allowed) {
+      return {
+        success: false,
+        action: 'rejected',
+        reason: riskCheck.reason,
+        mode: botMode,
+        riskCheck: {
+          slDistancePercent: riskCheck.slDistancePercent,
+          riskReward: riskCheck.riskReward,
+        },
+      };
+    }
+
+    // Step 4: Prepare order
+    const instrumentName = normalizeInstrumentName(signal.symbol);
+    const positionSizeUsd = riskCheck.positionSizeUsd;
+    const positionSizeContracts = convertUsdToContracts(positionSizeUsd, instrumentName);
+
+    if (positionSizeContracts <= 0) {
+      return {
+        success: false,
+        action: 'rejected',
+        reason: `Calculated position size too small: ${positionSizeContracts} contracts`,
+        mode: botMode,
+      };
+    }
+
+    const side = signal.signal.toUpperCase() === 'LONG' ? 'buy' : 'sell';
+
+    // Step 5: Execute trade (paper or live)
+    if (isPaperMode) {
+      // Paper mode: log only, no actual order
+      const paperTrade = {
+        mode: 'paper',
+        instrument: instrumentName,
+        side,
+        type: 'limit',
+        amount: positionSizeContracts,
+        price: signal.entry_price,
+        stopLoss: signal.sl_price,
+        takeProfit: signal.tp_price,
+        positionSizeUsd,
+        equity,
+        riskCheck: {
+          slDistancePercent: riskCheck.slDistancePercent,
+          riskReward: riskCheck.riskReward,
+        },
+        timestamp: new Date().toISOString(),
+      };
+
+      console.log('[tradeExecutor] PAPER TRADE:', JSON.stringify(paperTrade, null, 2));
+
+      return {
+        success: true,
+        action: 'paper_trade_logged',
+        reason: 'Trade executed in paper mode (logged only)',
+        mode: 'paper',
+        trade: paperTrade,
+      };
+    } else {
+      // Live mode: place actual order
+      try {
+        // Place main order (limit order at entry price)
+        const orderResult = await placeOrder({
+          instrument_name: instrumentName,
+          side,
+          type: 'limit',
+          amount: positionSizeContracts,
+          price: signal.entry_price,
+          time_in_force: 'good_til_cancelled',
+        }, useTestnet);
+
+        // Note: Deribit doesn't support native stop-loss/take-profit orders
+        // You would need to monitor positions and place separate stop orders
+        // For now, we log the SL/TP levels for manual monitoring
+
+        const liveTrade = {
+          mode: 'live',
+          instrument: instrumentName,
+          side,
+          orderId: orderResult.order_id,
+          orderState: orderResult.order_state,
+          amount: positionSizeContracts,
+          price: signal.entry_price,
+          stopLoss: signal.sl_price,
+          takeProfit: signal.tp_price,
+          positionSizeUsd,
+          equity,
+          riskCheck: {
+            slDistancePercent: riskCheck.slDistancePercent,
+            riskReward: riskCheck.riskReward,
+          },
+          timestamp: new Date().toISOString(),
+        };
+
+        console.log('[tradeExecutor] LIVE TRADE:', JSON.stringify(liveTrade, null, 2));
+
+        return {
+          success: true,
+          action: 'trade_placed',
+          reason: 'Order placed successfully on Deribit',
+          mode: 'live',
+          trade: liveTrade,
+          deribitOrder: orderResult,
+        };
+      } catch (error) {
+        return {
+          success: false,
+          action: 'order_failed',
+          reason: `Failed to place order: ${error.message}`,
+          mode: 'live',
+          error: error.message,
+        };
+      }
+    }
+  } catch (error) {
+    console.error('[tradeExecutor] Unexpected error:', error);
+    return {
+      success: false,
+      action: 'error',
+      reason: `Unexpected error: ${error.message}`,
+      mode: botMode,
+      error: error.message,
+    };
+  }
+}
+
+/**
+ * Get current account state for risk calculations
+ * 
+ * @param {boolean} useTestnet - Use testnet
+ * @returns {Promise<object>} Account state with equity, daily P&L, trades count
+ */
+export async function getAccountState(useTestnet = false) {
+  try {
+    const accountSummary = await getAccountSummary('BTC', useTestnet);
+    const openPositions = await getOpenPositions('BTC', null, useTestnet);
+
+    // Calculate daily P&L (simplified - Deribit API might have this directly)
+    // For now, we use total P&L from account summary
+    const dailyPnL = accountSummary.total_pl || 0; // This might be total, not daily
+    const tradesToday = openPositions.length; // Simplified: count open positions
+
+    return {
+      equity: accountSummary.equity || accountSummary.balance || 0,
+      balance: accountSummary.balance || 0,
+      availableFunds: accountSummary.available_funds || 0,
+      dailyPnL,
+      tradesToday,
+      openPositions: openPositions.length,
+    };
+  } catch (error) {
+    console.error('[tradeExecutor] getAccountState error:', error);
+    throw error;
+  }
+}
+
