@@ -8,13 +8,19 @@ import { getTrades, getStats } from '../utils/tradeStore.js';
 
 /**
  * Calculate P&L for a trade
- * For paper trades, we calculate based on entry vs TP (if successful) or SL (if rejected)
+ * For paper trades, we calculate based on entry vs TP (if successful)
+ * Rejected trades have P&L = 0 (they were never executed)
  * In a real scenario, you'd use current market price or actual exit price
  * 
  * @param {object} trade - Trade object
  * @returns {number} P&L in USD
  */
 function calculatePnL(trade) {
+  // Rejected trades don't count towards P&L (they were never executed)
+  if (trade.success === false || trade.action === 'rejected') {
+    return 0;
+  }
+
   if (!trade.entryPrice || !trade.positionSizeUsd) {
     return 0;
   }
@@ -26,20 +32,16 @@ function calculatePnL(trade) {
     return 0;
   }
 
-  // Determine exit price based on trade success
-  // Successful trades: assume closed at TP (profit)
-  // Rejected/failed trades: assume closed at SL (loss)
+  // For successful trades: assume closed at TP (profit)
+  // In paper mode, we assume the trade would have hit TP
   let exitPrice = null;
   
-  if (trade.success !== false && trade.takeProfit) {
+  if (trade.takeProfit) {
     // Successful trade: closed at TP
     exitPrice = parseFloat(trade.takeProfit);
   } else if (trade.stopLoss) {
-    // Failed/rejected trade: closed at SL
+    // If no TP, assume it hit SL (loss)
     exitPrice = parseFloat(trade.stopLoss);
-  } else if (trade.takeProfit) {
-    // Fallback: use TP if available
-    exitPrice = parseFloat(trade.takeProfit);
   }
 
   if (!exitPrice || exitPrice <= 0) {
@@ -84,8 +86,14 @@ export default async function handler(req, res) {
       pnl: calculatePnL(trade),
     }));
 
-    // Calculate total P&L
-    const totalPnL = tradesWithPnL.reduce((sum, trade) => sum + (trade.pnl || 0), 0);
+    // Calculate total P&L (only from successful trades, rejected trades have P&L = 0)
+    const totalPnL = tradesWithPnL.reduce((sum, trade) => {
+      // Only count P&L from trades that were actually executed (not rejected)
+      if (trade.success !== false && trade.action !== 'rejected') {
+        return sum + (trade.pnl || 0);
+      }
+      return sum;
+    }, 0);
 
     // Get statistics
     const stats = await getStats();
