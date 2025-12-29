@@ -102,12 +102,22 @@ export async function executeTrade(signal, options = {}) {
     try {
       accountSummary = await getAccountSummary(currency, useTestnet);
     } catch (error) {
-      return {
-        success: false,
-        action: 'rejected',
-        reason: `Failed to get account summary: ${error.message}`,
-        mode: botMode,
-      };
+      // In paper mode, use mock account for testing without Deribit
+      if (isPaperMode) {
+        console.warn('[tradeExecutor] Using mock account (Deribit not available)');
+        accountSummary = {
+          equity: 10000,
+          balance: 10000,
+          available_funds: 10000,
+        };
+      } else {
+        return {
+          success: false,
+          action: 'rejected',
+          reason: `Failed to get account summary: ${error.message}`,
+          mode: botMode,
+        };
+      }
     }
 
     const equity = accountSummary.equity || accountSummary.balance || 0;

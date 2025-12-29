@@ -149,16 +149,34 @@ export default async function handler(req, res) {
 
     // Get account state for risk calculations
     let accountState;
+    const botMode = (process.env.BOT_MODE || 'paper').toLowerCase();
+    const isPaperMode = botMode === 'paper';
+    
     try {
       const useTestnet = process.env.DERIBIT_USE_TESTNET === 'true';
       accountState = await getAccountState(useTestnet);
     } catch (error) {
       console.error('[webhook] Failed to get account state:', error);
-      return res.status(500).json({
-        status: 'error',
-        action: 'rejected',
-        reason: `Failed to get account state: ${error.message}`,
-      });
+      
+      // In paper mode, use mock account state for testing without Deribit
+      if (isPaperMode) {
+        console.warn('[webhook] Using mock account state (Deribit not available)');
+        accountState = {
+          equity: 10000, // Mock $10,000 account
+          balance: 10000,
+          availableFunds: 10000,
+          dailyPnL: 0,
+          tradesToday: 0,
+          openPositions: 0,
+        };
+      } else {
+        // In live mode, fail if we can't get account state
+        return res.status(500).json({
+          status: 'error',
+          action: 'rejected',
+          reason: `Failed to get account state: ${error.message}`,
+        });
+      }
     }
 
     // Execute trade
