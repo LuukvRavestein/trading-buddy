@@ -12,6 +12,7 @@
  */
 
 import { executeTrade, getAccountState } from '../core/tradeExecutor.js';
+import { saveTrade } from '../utils/tradeStore.js';
 
 /**
  * Validate webhook secret if configured
@@ -208,6 +209,32 @@ export default async function handler(req, res) {
       symbol: signal.symbol,
       entryPrice: signal.entry_price,
     });
+
+    // Save trade to store (both successful and rejected)
+    try {
+      const tradeToSave = {
+        success: tradeResult.success,
+        action: tradeResult.action,
+        reason: tradeResult.reason,
+        mode: tradeResult.mode,
+        signal: signal.signal,
+        symbol: signal.symbol,
+        instrument: tradeResult.trade?.instrument || signal.symbol,
+        entryPrice: signal.entry_price,
+        stopLoss: signal.sl_price,
+        takeProfit: signal.tp_price,
+        side: tradeResult.trade?.side || (signal.signal.toUpperCase() === 'LONG' ? 'buy' : 'sell'),
+        amount: tradeResult.trade?.amount || 0,
+        positionSizeUsd: tradeResult.trade?.positionSizeUsd || 0,
+        riskCheck: tradeResult.riskCheck || tradeResult.trade?.riskCheck,
+        orderId: tradeResult.deribitOrder?.order_id,
+        processingTimeMs: processingTime,
+        requestId,
+      };
+      saveTrade(tradeToSave);
+    } catch (error) {
+      console.error(`[webhook] [${requestId}] Failed to save trade:`, error);
+    }
 
     // Return response
     const response = {
