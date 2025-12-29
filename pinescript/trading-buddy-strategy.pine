@@ -34,6 +34,9 @@ zoneStrength = input.int(3, "Zone Strength (touches)", minval=2, maxval=10, grou
 // Webhook secret (optional, for security)
 webhookSecret = input.string("", "Webhook Secret (optional)", group="Webhook Settings")
 
+// Test mode (for testing webhook without real signals)
+enableTestMode = input.bool(false, "Enable Test Mode", group="Webhook Settings", tooltip="When enabled, sends a test alert every bar to verify webhook is working")
+
 // --- VARIABLES ---
 var string currentTrend = "NEUTRAL"
 var float supplyZoneHigh = na
@@ -170,6 +173,18 @@ plotshape(shortSignal, style=shape.triangledown, location=location.abovebar, col
 // Plot trend
 plot(currentTrend == "UP" ? low : na, color=color.new(color.green, 80), style=plot.style_stepline, linewidth=2, title="Uptrend")
 plot(currentTrend == "DOWN" ? high : na, color=color.new(color.red, 80), style=plot.style_stepline, linewidth=2, title="Downtrend")
+
+// --- TEST ALERT (for webhook verification) ---
+// Send test alert if test mode is enabled
+if enableTestMode and barstate.isconfirmed
+    testPayload = '{"signal":"TEST","symbol":"' + syminfo.ticker + '","entry_price":' + str.tostring(close, "#.##") + ',"sl_price":' + str.tostring(close * 0.995, "#.##") + ',"tp_price":' + str.tostring(close * 1.01, "#.##") + ',"timeframe":"' + str.tostring(timeframe.period) + '","time":"' + str.tostring(time) + '","trend":"' + currentTrend + '","test":true'
+    
+    if webhookSecret != ""
+        testPayload := testPayload + ',"secret":"' + webhookSecret + '"'
+    
+    testPayload := testPayload + '}'
+    
+    alert(testPayload, alert.freq_once_per_bar)
 
 // --- ALERT LOGIC ---
 // Generate webhook payload when signal is detected

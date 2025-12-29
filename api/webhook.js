@@ -126,12 +126,26 @@ export default async function handler(req, res) {
 
     // Extract signal data
     const signal = {
-      signal: payload.signal, // 'LONG' or 'SHORT'
+      signal: payload.signal, // 'LONG', 'SHORT', or 'TEST'
       symbol: payload.symbol || payload.ticker || 'BTC-PERPETUAL',
       entry_price: parseFloat(payload.entry_price),
       sl_price: parseFloat(payload.sl_price),
       tp_price: payload.tp_price ? parseFloat(payload.tp_price) : undefined,
+      trend: payload.trend || 'NEUTRAL', // Add trend for AI check
     };
+
+    // Handle TEST signals (for webhook verification)
+    if (signal.signal && signal.signal.toUpperCase() === 'TEST') {
+      console.log(`[webhook] [${requestId}] Test signal received - webhook is working correctly`);
+      return res.status(200).json({
+        status: 'ok',
+        action: 'test_received',
+        reason: 'Test signal received successfully. Webhook is working.',
+        mode: (process.env.BOT_MODE || 'paper').toLowerCase(),
+        timestamp: new Date().toISOString(),
+        processing_time_ms: Date.now() - startTime,
+      });
+    }
 
     // Validate required fields
     if (!signal.signal || !['LONG', 'SHORT'].includes(signal.signal.toUpperCase())) {
