@@ -79,6 +79,24 @@ MAX_TRADES_PER_DAY=5
 
 **Als je deze niet instelt, worden de defaults gebruikt.**
 
+### AI Check (OpenAI)
+
+```
+OPENAI_API_KEY=sk-...
+ENABLE_AI_CHECK=false
+```
+
+**Hoe te verkrijgen:**
+1. Ga naar [OpenAI Platform](https://platform.openai.com)
+2. Maak een API key aan
+3. Kopieer de key
+
+**Opties:**
+- `ENABLE_AI_CHECK=true` - Activeer AI quality checks
+- `ENABLE_AI_CHECK=false` - AI check uitgeschakeld (default)
+
+**Zie [AI_CHECK.md](./AI_CHECK.md) voor meer details.**
+
 ---
 
 ## 📝 Voorbeeld Configuratie
@@ -102,6 +120,8 @@ DERIBIT_USE_TESTNET=true
 MAX_RISK_PERCENT=1
 MAX_DAILY_LOSS_PERCENT=3
 MAX_TRADES_PER_DAY=5
+OPENAI_API_KEY=sk-...
+ENABLE_AI_CHECK=false
 ```
 
 ### Productie Configuratie (Live Mode)
