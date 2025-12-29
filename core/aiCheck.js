@@ -150,8 +150,14 @@ function buildEvaluationPrompt(tradeData) {
 
   // Determine if this is a small test account
   const isSmallAccount = equity < 1000;
+  const riskPerTradeUsd = Math.abs(entryPrice - stopLoss) * (positionSizeUsd / entryPrice);
+  const riskPercentOfEquity = (riskPerTradeUsd / equity) * 100;
+  
   const accountContext = isSmallAccount 
-    ? `NOTE: This is a small test account ($${equity.toFixed(2)}). Position sizes are proportionally smaller.`
+    ? `CRITICAL CONTEXT: This is a SMALL TEST ACCOUNT with $${equity.toFixed(2)} equity. 
+For small accounts, position sizes are proportionally smaller. A position size of $${positionSizeUsd.toFixed(2)} (${riskPercent.toFixed(2)}% of equity) is NORMAL and ACCEPTABLE for a $${equity.toFixed(2)} account.
+The actual risk per trade is $${riskPerTradeUsd.toFixed(2)} (${riskPercentOfEquity.toFixed(2)}% of equity), which is appropriate for small account testing.
+DO NOT reject trades solely because the position size seems small in absolute terms - this is expected for small accounts.`
     : '';
 
   return `Analyze this Bitcoin trading proposal and provide your assessment.
@@ -166,10 +172,17 @@ TRADE PROPOSAL:
 - Take Profit: $${takeProfit ? takeProfit.toLocaleString() : 'Not specified'}
 - Risk:Reward Ratio: ${rr ? rr.toFixed(2) : 'N/A'}
 - Position Size: $${positionSizeUsd.toFixed(2)} (${riskPercent.toFixed(2)}% of equity)
+- Actual Risk per Trade: $${riskPerTradeUsd.toFixed(2)} (${riskPercentOfEquity.toFixed(2)}% of equity)
 - Account Equity: $${equity.toFixed(2)}
 - Market Trend: ${trend || 'Unknown'}
 
-${isSmallAccount ? 'IMPORTANT: For small test accounts, position sizes are proportionally smaller. This is normal and acceptable for testing purposes.' : ''}
+${isSmallAccount ? `
+EVALUATION GUIDELINES FOR SMALL ACCOUNTS:
+- Position sizes of $1-5 are NORMAL for $100 accounts
+- Focus on risk management (SL distance, R:R ratio) rather than absolute position size
+- The position size has already been calculated by the risk engine based on proper risk management rules
+- Only reject if there are fundamental issues with the trade setup (poor R:R, inappropriate SL, etc.)
+- DO NOT reject because the position size seems "too small" - this is expected for small accounts` : ''}
 
 Please provide your analysis in JSON format with the following structure:
 {
@@ -183,13 +196,13 @@ Please provide your analysis in JSON format with the following structure:
 }
 
 Consider:
-1. Risk management: Is the stop loss appropriate? Is position size reasonable?
+1. Risk management: Is the stop loss appropriate? Is the risk percentage reasonable?
 2. Risk:Reward ratio: Is the potential reward worth the risk?
 3. Market context: Does the trade align with the current trend?
 4. Entry timing: Is this a good entry point?
 5. Overall quality: Is this a high-probability setup?
 
-Be objective and conservative. Only recommend trades that meet high-quality standards.`;
+${isSmallAccount ? 'For small accounts, be more lenient with position size concerns. Focus on trade quality (R:R, SL placement, trend alignment) rather than absolute position size.' : 'Be objective and conservative. Only recommend trades that meet high-quality standards.'}`;
 }
 
 /**

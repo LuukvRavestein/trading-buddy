@@ -142,6 +142,15 @@ export async function executeTrade(signal, options = {}) {
     });
 
     if (!riskCheck.allowed) {
+      console.warn(`[tradeExecutor] Risk check REJECTED trade: ${riskCheck.reason}`, {
+        equity,
+        entryPrice: signal.entry_price,
+        stopLoss: signal.sl_price,
+        takeProfit: signal.tp_price,
+        positionSizeUsd: riskCheck.positionSizeUsd,
+        slDistancePercent: riskCheck.slDistancePercent,
+        riskReward: riskCheck.riskReward,
+      });
       return {
         success: false,
         action: 'rejected',
@@ -150,6 +159,7 @@ export async function executeTrade(signal, options = {}) {
         riskCheck: {
           slDistancePercent: riskCheck.slDistancePercent,
           riskReward: riskCheck.riskReward,
+          positionSizeUsd: riskCheck.positionSizeUsd, // Include position size even when rejected
         },
       };
     }
@@ -174,6 +184,18 @@ export async function executeTrade(signal, options = {}) {
     
     if (enableAICheck) {
       try {
+        console.log(`[tradeExecutor] Running AI check for ${signal.signal} trade:`, {
+          entryPrice: signal.entry_price,
+          stopLoss: signal.sl_price,
+          takeProfit: signal.tp_price,
+          positionSizeUsd,
+          equity,
+          riskCheck: {
+            slDistancePercent: riskCheck.slDistancePercent,
+            riskReward: riskCheck.riskReward,
+          },
+        });
+        
         // Get current trend from signal if available, or use 'NEUTRAL'
         const currentTrend = signal.trend || 'NEUTRAL';
         
@@ -192,8 +214,15 @@ export async function executeTrade(signal, options = {}) {
           equity,
         });
 
+        console.log(`[tradeExecutor] AI check result:`, {
+          allow_trade: aiCheck.allow_trade,
+          confidence: aiCheck.confidence,
+          reason: aiCheck.reason,
+        });
+
         // If AI rejects the trade, return rejection
         if (!aiCheck.allow_trade) {
+          console.warn(`[tradeExecutor] AI check REJECTED trade: ${aiCheck.reason}`);
           return {
             success: false,
             action: 'rejected',

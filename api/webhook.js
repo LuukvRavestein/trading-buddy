@@ -208,6 +208,13 @@ export default async function handler(req, res) {
       signal: signal.signal,
       symbol: signal.symbol,
       entryPrice: signal.entry_price,
+      riskCheck: tradeResult.riskCheck,
+      aiCheck: tradeResult.aiCheck ? {
+        enabled: tradeResult.aiCheck.enabled,
+        allow_trade: tradeResult.aiCheck.allow_trade,
+        confidence: tradeResult.aiCheck.confidence,
+        reason: tradeResult.aiCheck.reason,
+      } : null,
     });
 
     // Save trade to store (both successful and rejected)
@@ -225,7 +232,7 @@ export default async function handler(req, res) {
         takeProfit: signal.tp_price,
         side: tradeResult.trade?.side || (signal.signal.toUpperCase() === 'LONG' ? 'buy' : 'sell'),
         amount: tradeResult.trade?.amount || 0,
-        positionSizeUsd: tradeResult.trade?.positionSizeUsd || 0,
+        positionSizeUsd: tradeResult.trade?.positionSizeUsd || tradeResult.riskCheck?.positionSizeUsd || 0,
         riskCheck: tradeResult.riskCheck || tradeResult.trade?.riskCheck,
         aiCheck: tradeResult.aiCheck || undefined,
         orderId: tradeResult.deribitOrder?.order_id,
