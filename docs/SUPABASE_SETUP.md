@@ -54,6 +54,9 @@ CREATE TABLE IF NOT EXISTS trades (
   -- Order info (for live trades)
   order_id TEXT,
   
+  -- AI check info (stored as JSON)
+  ai_check JSONB,
+  
   -- Metadata
   processing_time_ms INTEGER,
   request_id TEXT,

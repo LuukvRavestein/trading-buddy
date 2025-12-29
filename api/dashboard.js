@@ -259,6 +259,106 @@ const dashboardHTML = `<!DOCTYPE html>
     .pnl-zero {
       color: #9ca3af;
     }
+    
+    .ai-confidence {
+      font-weight: 600;
+      font-size: 0.9em;
+    }
+    
+    .ai-confidence-high {
+      color: #10b981;
+    }
+    
+    .ai-confidence-medium {
+      color: #f59e0b;
+    }
+    
+    .ai-confidence-low {
+      color: #ef4444;
+    }
+    
+    .ai-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 8px;
+      font-size: 0.75em;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    
+    .ai-badge:hover {
+      opacity: 0.8;
+    }
+    
+    .ai-badge-enabled {
+      background: #10b981;
+      color: white;
+    }
+    
+    .ai-badge-disabled {
+      background: #6b7280;
+      color: white;
+    }
+    
+    .ai-details {
+      display: none;
+      padding: 15px;
+      background: #0f1419;
+      border-top: 1px solid #2d3748;
+    }
+    
+    .ai-details.show {
+      display: block;
+    }
+    
+    .ai-details-content {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 15px;
+      margin-top: 10px;
+    }
+    
+    .ai-detail-section {
+      background: #1a1f3a;
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid #2d3748;
+    }
+    
+    .ai-detail-label {
+      color: #9ca3af;
+      font-size: 0.8em;
+      text-transform: uppercase;
+      margin-bottom: 5px;
+    }
+    
+    .ai-detail-value {
+      color: #e0e0e0;
+      font-size: 0.9em;
+    }
+    
+    .ai-risks, .ai-recommendations {
+      list-style: none;
+      padding: 0;
+      margin: 5px 0 0 0;
+    }
+    
+    .ai-risks li, .ai-recommendations li {
+      padding: 4px 0;
+      color: #9ca3af;
+      font-size: 0.85em;
+    }
+    
+    .ai-risks li:before {
+      content: "⚠️ ";
+      margin-right: 5px;
+    }
+    
+    .ai-recommendations li:before {
+      content: "💡 ";
+      margin-right: 5px;
+    }
   </style>
 </head>
 <body>
@@ -392,6 +492,7 @@ const dashboardHTML = `<!DOCTYPE html>
       html += '<th>Size (USD)</th>';
       html += '<th>P&L</th>';
       html += '<th>R:R</th>';
+      html += '<th>AI Check</th>';
       html += '<th>Status</th>';
       html += '</tr></thead><tbody>';
       
@@ -418,8 +519,94 @@ const dashboardHTML = `<!DOCTYPE html>
         html += \`<td class="price \${pnlClass}">\${formatPrice(pnl)}</td>\`;
         
         html += \`<td>\${rr}</td>\`;
+        
+        // AI Check column
+        const aiCheck = trade.aiCheck;
+        if (aiCheck && aiCheck.enabled) {
+          const confidence = aiCheck.confidence;
+          let confidenceClass = 'ai-confidence-medium';
+          let confidenceText = '-';
+          
+          if (confidence !== null && confidence !== undefined) {
+            confidenceText = (confidence * 100).toFixed(0) + '%';
+            if (confidence >= 0.7) {
+              confidenceClass = 'ai-confidence-high';
+            } else if (confidence >= 0.4) {
+              confidenceClass = 'ai-confidence-medium';
+            } else {
+              confidenceClass = 'ai-confidence-low';
+            }
+          }
+          
+          html += \`<td><span class="ai-badge ai-badge-enabled" onclick="toggleAIDetails('\${trade.id}')" title="Click for AI analysis">\${confidenceText}</span></td>\`;
+        } else {
+          html += '<td><span class="ai-badge ai-badge-disabled" title="AI check not enabled">-</span></td>';
+        }
+        
         html += \`<td><span class="badge \${successClass}">\${trade.action || 'N/A'}</span></td>\`;
         html += '</tr>';
+        
+        // AI Details row (expandable)
+        if (aiCheck && aiCheck.enabled) {
+          html += \`<tr class="ai-details-row" id="ai-details-\${trade.id}"><td colspan="13" class="ai-details">\`;
+          html += '<div style="margin-bottom: 10px;"><strong style="color: #4ade80;">🤖 AI Analysis</strong></div>';
+          
+          html += '<div class="ai-details-content">';
+          
+          // Confidence and Decision
+          html += '<div class="ai-detail-section">';
+          html += '<div class="ai-detail-label">Confidence</div>';
+          html += \`<div class="ai-detail-value \${confidenceClass}">\${confidenceText}</div>\`;
+          html += '</div>';
+          
+          html += '<div class="ai-detail-section">';
+          html += '<div class="ai-detail-label">Decision</div>';
+          html += \`<div class="ai-detail-value">\${aiCheck.allow_trade ? '✅ Approved' : '❌ Rejected'}</div>\`;
+          html += '</div>';
+          
+          // Reason
+          if (aiCheck.reason) {
+            html += '<div class="ai-detail-section" style="grid-column: 1 / -1;">';
+            html += '<div class="ai-detail-label">Reason</div>';
+            html += \`<div class="ai-detail-value">\${aiCheck.reason}</div>\`;
+            html += '</div>';
+          }
+          
+          // Analysis
+          if (aiCheck.analysis) {
+            html += '<div class="ai-detail-section" style="grid-column: 1 / -1;">';
+            html += '<div class="ai-detail-label">Analysis</div>';
+            html += \`<div class="ai-detail-value">\${aiCheck.analysis}</div>\`;
+            html += '</div>';
+          }
+          
+          // Risks
+          if (aiCheck.risks && Array.isArray(aiCheck.risks) && aiCheck.risks.length > 0) {
+            html += '<div class="ai-detail-section">';
+            html += '<div class="ai-detail-label">Risks</div>';
+            html += '<ul class="ai-risks">';
+            aiCheck.risks.forEach(risk => {
+              html += \`<li>\${risk}</li>\`;
+            });
+            html += '</ul>';
+            html += '</div>';
+          }
+          
+          // Recommendations
+          if (aiCheck.recommendations && Array.isArray(aiCheck.recommendations) && aiCheck.recommendations.length > 0) {
+            html += '<div class="ai-detail-section">';
+            html += '<div class="ai-detail-label">Recommendations</div>';
+            html += '<ul class="ai-recommendations">';
+            aiCheck.recommendations.forEach(rec => {
+              html += \`<li>\${rec}</li>\`;
+            });
+            html += '</ul>';
+            html += '</div>';
+          }
+          
+          html += '</div>'; // ai-details-content
+          html += '</td></tr>';
+        }
       });
       
       html += '</tbody></table>';
@@ -476,6 +663,20 @@ const dashboardHTML = `<!DOCTYPE html>
         }
       }
     });
+    
+    // Toggle AI details
+    function toggleAIDetails(tradeId) {
+      const detailsRow = document.getElementById(\`ai-details-\${tradeId}\`);
+      if (detailsRow) {
+        const details = detailsRow.querySelector('.ai-details');
+        if (details) {
+          details.classList.toggle('show');
+        }
+      }
+    }
+    
+    // Make toggleAIDetails available globally
+    window.toggleAIDetails = toggleAIDetails;
     
     // Initial load
     loadTrades();

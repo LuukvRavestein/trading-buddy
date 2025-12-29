@@ -108,6 +108,7 @@ export async function getTrades(options = {}) {
         amount: t.amount,
         positionSizeUsd: parseFloat(t.position_size_usd) || t.position_size_usd,
         riskCheck: t.risk_check,
+        aiCheck: t.ai_check, // Include AI check data
         orderId: t.order_id,
         processingTimeMs: t.processing_time_ms,
         requestId: t.request_id,
