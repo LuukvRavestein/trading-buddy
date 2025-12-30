@@ -9,6 +9,7 @@
  */
 
 import { getTrades, updateTradeExit } from '../utils/tradeStore.js';
+import { getCurrentPrice } from '../utils/deribitClient.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -41,19 +42,63 @@ export default async function handler(req, res) {
     // Get the oldest open trade (first in array, which is most recent, so we want the last)
     const tradeToClose = openTrades[openTrades.length - 1];
     
-    // Determine exit type and price if not provided
+    // Determine exit type and price automatically if not provided
     let finalExitType = exitType;
     let finalExitPrice = exitPrice;
     
     if (!finalExitType || !finalExitPrice) {
-      // Try to determine from current price vs entry
-      // For LONG: if current price > entry, likely TP; if < entry, likely SL
-      // For SHORT: if current price < entry, likely TP; if > entry, likely SL
+      // Try to get current market price to determine if TP or SL was hit
+      let currentPrice = null;
+      try {
+        const instrument = tradeToClose.instrument || tradeToClose.symbol || 'BTC-PERPETUAL';
+        const useTestnet = process.env.DERIBIT_USE_TESTNET === 'true';
+        currentPrice = await getCurrentPrice(instrument, useTestnet);
+      } catch (error) {
+        console.warn('[close-open-trade] Could not get current price:', error.message);
+      }
       
-      // Since we don't have current price here, we'll use a heuristic
-      // For now, we'll mark as "UNKNOWN" and let the user specify
+      // Determine exit type based on current price vs entry price
+      if (currentPrice && tradeToClose.entryPrice) {
+        if (tradeToClose.signal === 'LONG') {
+          // LONG: TP if current price >= TP, SL if current price <= SL
+          if (tradeToClose.takeProfit && currentPrice >= tradeToClose.takeProfit) {
+            finalExitType = 'TAKE_PROFIT';
+            finalExitPrice = tradeToClose.takeProfit;
+          } else if (tradeToClose.stopLoss && currentPrice <= tradeToClose.stopLoss) {
+            finalExitType = 'STOP_LOSS';
+            finalExitPrice = tradeToClose.stopLoss;
+          } else if (currentPrice > tradeToClose.entryPrice) {
+            // Price is above entry but below TP - assume it would have hit TP eventually
+            finalExitType = 'TAKE_PROFIT';
+            finalExitPrice = tradeToClose.takeProfit || currentPrice;
+          } else {
+            // Price is below entry but above SL - assume it would have hit SL eventually
+            finalExitType = 'STOP_LOSS';
+            finalExitPrice = tradeToClose.stopLoss || currentPrice;
+          }
+        } else if (tradeToClose.signal === 'SHORT') {
+          // SHORT: TP if current price <= TP, SL if current price >= SL
+          if (tradeToClose.takeProfit && currentPrice <= tradeToClose.takeProfit) {
+            finalExitType = 'TAKE_PROFIT';
+            finalExitPrice = tradeToClose.takeProfit;
+          } else if (tradeToClose.stopLoss && currentPrice >= tradeToClose.stopLoss) {
+            finalExitType = 'STOP_LOSS';
+            finalExitPrice = tradeToClose.stopLoss;
+          } else if (currentPrice < tradeToClose.entryPrice) {
+            // Price is below entry but above TP - assume it would have hit TP eventually
+            finalExitType = 'TAKE_PROFIT';
+            finalExitPrice = tradeToClose.takeProfit || currentPrice;
+          } else {
+            // Price is above entry but below SL - assume it would have hit SL eventually
+            finalExitType = 'STOP_LOSS';
+            finalExitPrice = tradeToClose.stopLoss || currentPrice;
+          }
+        }
+      }
+      
+      // Fallback: if we still don't have exit type/price, use defaults
       if (!finalExitType) {
-        // Default: assume TP if we can't determine (user should specify)
+        // Default: assume TP (optimistic)
         finalExitType = 'TAKE_PROFIT';
       }
       
