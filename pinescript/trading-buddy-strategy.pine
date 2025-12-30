@@ -256,33 +256,49 @@ if strategy.position_size != 0 and na(lastEntryPrice)
         exitAlertSent := false
 
 // Detect if TP or SL was hit (for validation alerts)
-// Check every bar, not just when signal is generated
+// Check every bar, including checking if TP/SL was hit on previous bars since entry
 if not na(lastEntryPrice) and not na(lastSLPrice) and not na(lastTPPrice) and not exitAlertSent
     bool tpHit = false
     bool slHit = false
     float exitPrice = na
     string exitReason = ""
     
+    // Calculate how many bars since entry
+    barsSinceEntry = bar_index - lastEntryBar
+    lookbackBars = math.min(barsSinceEntry + 1, 200) // Check up to 200 bars back
+    
     if lastSignalType == "LONG"
-        // LONG: TP hit if high >= TP, SL hit if low <= SL
-        if high >= lastTPPrice
-            tpHit := true
-            exitPrice := lastTPPrice
-            exitReason := "TAKE_PROFIT"
-        else if low <= lastSLPrice
-            slHit := true
-            exitPrice := lastSLPrice
-            exitReason := "STOP_LOSS"
+        // LONG: Check if highest high since entry >= TP, or lowest low <= SL
+        if lookbackBars > 0
+            highestSinceEntry = ta.highest(high, lookbackBars)
+            lowestSinceEntry = ta.lowest(low, lookbackBars)
+            
+            // Check TP first (priority)
+            if highestSinceEntry >= lastTPPrice
+                tpHit := true
+                exitPrice := lastTPPrice
+                exitReason := "TAKE_PROFIT"
+            // Then check SL
+            else if lowestSinceEntry <= lastSLPrice
+                slHit := true
+                exitPrice := lastSLPrice
+                exitReason := "STOP_LOSS"
     else if lastSignalType == "SHORT"
-        // SHORT: TP hit if low <= TP, SL hit if high >= SL
-        if low <= lastTPPrice
-            tpHit := true
-            exitPrice := lastTPPrice
-            exitReason := "TAKE_PROFIT"
-        else if high >= lastSLPrice
-            slHit := true
-            exitPrice := lastSLPrice
-            exitReason := "STOP_LOSS"
+        // SHORT: Check if lowest low since entry <= TP, or highest high >= SL
+        if lookbackBars > 0
+            highestSinceEntry = ta.highest(high, lookbackBars)
+            lowestSinceEntry = ta.lowest(low, lookbackBars)
+            
+            // Check TP first (priority)
+            if lowestSinceEntry <= lastTPPrice
+                tpHit := true
+                exitPrice := lastTPPrice
+                exitReason := "TAKE_PROFIT"
+            // Then check SL
+            else if highestSinceEntry >= lastSLPrice
+                slHit := true
+                exitPrice := lastSLPrice
+                exitReason := "STOP_LOSS"
     
     // Send validation alert when TP or SL is hit
     if (tpHit or slHit) and barstate.isconfirmed
