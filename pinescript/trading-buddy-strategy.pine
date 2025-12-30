@@ -216,6 +216,68 @@ if shortSignal and barstate.isconfirmed
     // Strategy backtesting (optional)
     strategy.entry("SHORT", strategy.short, comment="SHORT")
 
+// --- TRADE EXIT DETECTION & VALIDATION ALERTS ---
+// Track the last entry signal to detect exits
+var float lastEntryPrice = na
+var float lastSLPrice = na
+var float lastTPPrice = na
+var string lastSignalType = na
+var int lastEntryBar = na
+
+// Store entry data when signal is generated
+if (longSignal or shortSignal) and barstate.isconfirmed
+    lastEntryPrice := entryPrice
+    lastSLPrice := slPrice
+    lastTPPrice := tpPrice
+    lastSignalType := longSignal ? "LONG" : "SHORT"
+    lastEntryBar := bar_index
+
+// Detect if TP or SL was hit (for validation alerts)
+if not na(lastEntryPrice) and not na(lastSLPrice) and not na(lastTPPrice)
+    bool tpHit = false
+    bool slHit = false
+    float exitPrice = na
+    string exitReason = ""
+    
+    if lastSignalType == "LONG"
+        // LONG: TP hit if high >= TP, SL hit if low <= SL
+        if high >= lastTPPrice
+            tpHit := true
+            exitPrice := lastTPPrice
+            exitReason := "TAKE_PROFIT"
+        else if low <= lastSLPrice
+            slHit := true
+            exitPrice := lastSLPrice
+            exitReason := "STOP_LOSS"
+    else if lastSignalType == "SHORT"
+        // SHORT: TP hit if low <= TP, SL hit if high >= SL
+        if low <= lastTPPrice
+            tpHit := true
+            exitPrice := lastTPPrice
+            exitReason := "TAKE_PROFIT"
+        else if high >= lastSLPrice
+            slHit := true
+            exitPrice := lastSLPrice
+            exitReason := "STOP_LOSS"
+    
+    // Send validation alert when TP or SL is hit
+    if (tpHit or slHit) and barstate.isconfirmed
+        string validationPayload = '{"signal":"TRADE_EXIT","type":"' + exitReason + '","symbol":"' + syminfo.ticker + '","entry_price":' + str.tostring(lastEntryPrice, "#.##") + ',"sl_price":' + str.tostring(lastSLPrice, "#.##") + ',"tp_price":' + str.tostring(lastTPPrice, "#.##") + ',"exit_price":' + str.tostring(exitPrice, "#.##") + ',"entry_signal":"' + lastSignalType + '","entry_bar":' + str.tostring(lastEntryBar) + ',"exit_bar":' + str.tostring(bar_index) + ',"timeframe":"' + str.tostring(timeframe.period) + '","time":"' + str.tostring(time) + '"'
+        
+        if webhookSecret != ""
+            validationPayload := validationPayload + ',"secret":"' + webhookSecret + '"'
+        
+        validationPayload := validationPayload + '}'
+        
+        alert(validationPayload, alert.freq_once_per_bar)
+        
+        // Reset tracking variables after exit
+        lastEntryPrice := na
+        lastSLPrice := na
+        lastTPPrice := na
+        lastSignalType := na
+        lastEntryBar := na
+
 // --- STRATEGY EXIT (for backtesting) ---
 if strategy.position_size > 0
     strategy.exit("LONG EXIT", "LONG", stop=slPrice, limit=tpPrice)

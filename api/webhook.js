@@ -147,7 +147,75 @@ export default async function handler(req, res) {
       });
     }
 
-    // Validate required fields
+    // Handle TRADE_EXIT signals (from TradingView validation alerts)
+    if (signal.signal && signal.signal.toUpperCase() === 'TRADE_EXIT') {
+      console.log(`[webhook] [${requestId}] Trade exit validation received`);
+      
+      const exitType = payload.type; // 'TAKE_PROFIT' or 'STOP_LOSS'
+      const exitPrice = parseFloat(payload.exit_price);
+      const entryPrice = parseFloat(payload.entry_price);
+      const entrySignal = payload.entry_signal; // 'LONG' or 'SHORT'
+      
+      if (!exitType || !exitPrice || !entryPrice) {
+        return res.status(400).json({
+          status: 'error',
+          action: 'rejected',
+          reason: 'Missing required exit data: type, exit_price, or entry_price',
+        });
+      }
+
+      // Find the matching trade by entry price and signal (within 0.1% tolerance)
+      const { getTrades } = await import('../utils/tradeStore.js');
+      const { updateTradeExit } = await import('../utils/tradeStore.js');
+      
+      const allTrades = await getTrades({ limit: 100 });
+      const matchingTrade = allTrades.find(t => {
+        const priceMatch = Math.abs(t.entryPrice - entryPrice) / entryPrice < 0.001; // 0.1% tolerance
+        const signalMatch = t.signal === entrySignal;
+        const noExitYet = !t.exitPrice && !t.exitType;
+        return priceMatch && signalMatch && noExitYet;
+      });
+
+      if (matchingTrade) {
+        try {
+          await updateTradeExit(matchingTrade.id, {
+            exitType,
+            exitPrice,
+            exitTime: new Date().toISOString(),
+            validated: true,
+            validatedBy: 'tradingview',
+          });
+          
+          console.log(`[webhook] [${requestId}] Trade ${matchingTrade.id} updated with exit: ${exitType} at ${exitPrice}`);
+          
+          return res.status(200).json({
+            status: 'ok',
+            action: 'trade_exit_recorded',
+            reason: `Trade exit recorded: ${exitType} at ${exitPrice}`,
+            tradeId: matchingTrade.id,
+            exitType,
+            exitPrice,
+            timestamp: new Date().toISOString(),
+          });
+        } catch (error) {
+          console.error(`[webhook] [${requestId}] Failed to update trade exit:`, error);
+          return res.status(500).json({
+            status: 'error',
+            action: 'update_failed',
+            reason: `Failed to update trade: ${error.message}`,
+          });
+        }
+      } else {
+        console.warn(`[webhook] [${requestId}] No matching trade found for exit validation`);
+        return res.status(404).json({
+          status: 'error',
+          action: 'trade_not_found',
+          reason: 'No matching trade found for this exit event',
+        });
+      }
+    }
+
+    // Validate required fields for entry signals
     if (!signal.signal || !['LONG', 'SHORT'].includes(signal.signal.toUpperCase())) {
       return res.status(400).json({
         status: 'error',

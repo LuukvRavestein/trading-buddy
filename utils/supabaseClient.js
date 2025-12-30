@@ -175,6 +175,27 @@ export async function getTradesFromSupabase(options = {}) {
 }
 
 /**
+ * Update a trade in Supabase
+ * 
+ * @param {string} tradeId - Trade ID
+ * @param {object} updateData - Data to update
+ * @returns {Promise<object>} Updated trade
+ */
+export async function updateTrade(tradeId, updateData) {
+  if (!isSupabaseConfigured()) {
+    return null;
+  }
+
+  try {
+    const result = await supabaseRequest('PATCH', `trades?id=eq.${tradeId}`, updateData);
+    return result[0] || null;
+  } catch (error) {
+    console.error('[supabase] Failed to update trade:', error);
+    throw error;
+  }
+}
+
+/**
  * Get trade statistics from Supabase
  * 
  * @returns {Promise<object>} Statistics

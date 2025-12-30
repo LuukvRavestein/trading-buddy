@@ -105,6 +105,11 @@ export async function getTrades(options = {}) {
         entryPrice: parseFloat(t.entry_price) || t.entry_price,
         stopLoss: parseFloat(t.stop_loss) || t.stop_loss,
         takeProfit: parseFloat(t.take_profit) || t.take_profit,
+        exitType: t.exit_type,
+        exitPrice: t.exit_price ? parseFloat(t.exit_price) : t.exit_price,
+        exitTime: t.exit_time,
+        validated: t.validated,
+        validatedBy: t.validated_by,
         side: t.side,
         amount: t.amount,
         positionSizeUsd: parseFloat(t.position_size_usd) || t.position_size_usd,
@@ -190,5 +195,53 @@ export async function getStats() {
 export async function getLatestTrade() {
   const latestTrades = await getTrades({ limit: 1 });
   return latestTrades.length > 0 ? latestTrades[0] : null;
+}
+
+/**
+ * Update trade with exit information
+ * 
+ * @param {string} tradeId - Trade ID
+ * @param {object} exitData - Exit data { exitType, exitPrice, exitTime, validated, validatedBy }
+ * @returns {Promise<object>} Updated trade
+ */
+export async function updateTradeExit(tradeId, exitData) {
+  const { updateTrade as updateTradeInSupabase } = await import('./supabaseClient.js');
+  
+  // Try to update in Supabase first
+  if (isSupabaseConfigured()) {
+    try {
+      const updateData = {
+        exit_type: exitData.exitType,
+        exit_price: exitData.exitPrice,
+        exit_time: exitData.exitTime,
+        validated: exitData.validated || false,
+        validated_by: exitData.validatedBy || null,
+      };
+      
+      const updated = await updateTradeInSupabase(tradeId, updateData);
+      if (updated) {
+        return updated;
+      }
+    } catch (error) {
+      console.error('[tradeStore] Failed to update trade in Supabase:', error);
+      // Fall through to in-memory update
+    }
+  }
+  
+  // Fallback to in-memory update
+  const tradeIndex = trades.findIndex(t => t.id === tradeId);
+  if (tradeIndex !== -1) {
+    trades[tradeIndex] = {
+      ...trades[tradeIndex],
+      exitType: exitData.exitType,
+      exitPrice: exitData.exitPrice,
+      exitTime: exitData.exitTime,
+      validated: exitData.validated || false,
+      validatedBy: exitData.validatedBy || null,
+    };
+    return trades[tradeIndex];
+  }
+  
+  throw new Error(`Trade with ID ${tradeId} not found`);
 }
 
