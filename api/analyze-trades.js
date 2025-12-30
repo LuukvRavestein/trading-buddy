@@ -10,7 +10,7 @@
  */
 
 import { getTrades } from '../utils/tradeStore.js';
-import { getCurrentPrice } from '../utils/deribitClient.js';
+import { getCurrentPrice, getHistoricalPriceData } from '../utils/deribitClient.js';
 
 /**
  * Analyze a single trade
@@ -179,47 +179,174 @@ function analyzeTrade(trade, currentMarketPrice = null) {
 }
 
 /**
- * Simulate trade outcome based on historical price movement
- * Note: This is a simplified simulation. In reality, you'd need historical price data.
+ * Validate trade outcome using historical price data from Deribit
+ * Checks if TP or SL was hit after entry time
  * 
  * @param {object} trade - Trade object
- * @param {number} currentPrice - Current market price
- * @returns {object} Simulation result
+ * @param {string} instrument - Instrument name
+ * @param {boolean} useTestnet - Use testnet
+ * @returns {Promise<object>} Validation result with actual outcome
  */
-function simulateTradeOutcome(trade, currentPrice) {
-  if (!trade.entryPrice || !currentPrice) {
-    return { outcome: 'unknown', reason: 'Missing price data' };
+async function validateTradeWithHistoricalData(trade, instrument, useTestnet = false) {
+  if (!trade.entryPrice || !trade.timestamp) {
+    return { 
+      outcome: 'unknown', 
+      reason: 'Missing entry price or timestamp',
+      validated: false 
+    };
   }
 
-  const entryPrice = trade.entryPrice;
-  const stopLoss = trade.stopLoss;
-  const takeProfit = trade.takeProfit;
-
-  if (trade.signal === 'LONG') {
-    // Check if price hit TP or SL
-    if (takeProfit && currentPrice >= takeProfit) {
-      return { outcome: 'win', reason: 'Price reached take profit level', exitPrice: takeProfit };
-    } else if (stopLoss && currentPrice <= stopLoss) {
-      return { outcome: 'loss', reason: 'Price hit stop loss level', exitPrice: stopLoss };
-    } else if (currentPrice > entryPrice) {
-      return { outcome: 'open_profit', reason: 'Trade would be in profit but not yet at TP', currentPrice };
-    } else if (currentPrice < entryPrice) {
-      return { outcome: 'open_loss', reason: 'Trade would be in loss but not yet at SL', currentPrice };
-    }
-  } else if (trade.signal === 'SHORT') {
-    // Check if price hit TP or SL
-    if (takeProfit && currentPrice <= takeProfit) {
-      return { outcome: 'win', reason: 'Price reached take profit level', exitPrice: takeProfit };
-    } else if (stopLoss && currentPrice >= stopLoss) {
-      return { outcome: 'loss', reason: 'Price hit stop loss level', exitPrice: stopLoss };
-    } else if (currentPrice < entryPrice) {
-      return { outcome: 'open_profit', reason: 'Trade would be in profit but not yet at TP', currentPrice };
-    } else if (currentPrice > entryPrice) {
-      return { outcome: 'open_loss', reason: 'Trade would be in loss but not yet at SL', currentPrice };
-    }
+  const entryTimestamp = new Date(trade.timestamp).getTime();
+  const now = Date.now();
+  
+  // Only validate trades that are at least 1 minute old (to allow for data availability)
+  if (now - entryTimestamp < 60000) {
+    return {
+      outcome: 'pending',
+      reason: 'Trade too recent, waiting for historical data',
+      validated: false,
+    };
   }
 
-  return { outcome: 'unknown', reason: 'Cannot determine outcome' };
+  // Get historical data from entry time to now (or up to 24 hours after entry, whichever is earlier)
+  // We check up to 24 hours to see if TP/SL was hit
+  const endTimestamp = Math.min(entryTimestamp + (24 * 60 * 60 * 1000), now);
+  const startTimestamp = entryTimestamp;
+
+  try {
+    // Use 1-minute candles for precise validation
+    const candles = await getHistoricalPriceData(
+      instrument,
+      startTimestamp,
+      endTimestamp,
+      '60', // 1-minute resolution
+      useTestnet
+    );
+
+    if (!candles || candles.length === 0) {
+      return {
+        outcome: 'unknown',
+        reason: 'No historical data available',
+        validated: false,
+      };
+    }
+
+    const entryPrice = trade.entryPrice;
+    const stopLoss = trade.stopLoss;
+    const takeProfit = trade.takeProfit;
+
+    // Check each candle to see if TP or SL was hit
+    for (const candle of candles) {
+      // Skip candles before entry (shouldn't happen, but just in case)
+      if (candle.t < entryTimestamp) {
+        continue;
+      }
+
+      if (trade.signal === 'LONG') {
+        // LONG: Check if high hit TP or low hit SL
+        if (takeProfit && candle.h >= takeProfit) {
+          return {
+            outcome: 'win',
+            reason: `Take profit hit at ${new Date(candle.t).toISOString()}`,
+            exitPrice: takeProfit,
+            exitTime: new Date(candle.t).toISOString(),
+            validated: true,
+            candlesAnalyzed: candles.length,
+          };
+        }
+        if (stopLoss && candle.l <= stopLoss) {
+          return {
+            outcome: 'loss',
+            reason: `Stop loss hit at ${new Date(candle.t).toISOString()}`,
+            exitPrice: stopLoss,
+            exitTime: new Date(candle.t).toISOString(),
+            validated: true,
+            candlesAnalyzed: candles.length,
+          };
+        }
+      } else if (trade.signal === 'SHORT') {
+        // SHORT: Check if low hit TP or high hit SL
+        if (takeProfit && candle.l <= takeProfit) {
+          return {
+            outcome: 'win',
+            reason: `Take profit hit at ${new Date(candle.t).toISOString()}`,
+            exitPrice: takeProfit,
+            exitTime: new Date(candle.t).toISOString(),
+            validated: true,
+            candlesAnalyzed: candles.length,
+          };
+        }
+        if (stopLoss && candle.h >= stopLoss) {
+          return {
+            outcome: 'loss',
+            reason: `Stop loss hit at ${new Date(candle.t).toISOString()}`,
+            exitPrice: stopLoss,
+            exitTime: new Date(candle.t).toISOString(),
+            validated: true,
+            candlesAnalyzed: candles.length,
+          };
+        }
+      }
+    }
+
+    // If we get here, neither TP nor SL was hit
+    // Check current status
+    const lastCandle = candles[candles.length - 1];
+    const currentPrice = lastCandle.c; // Close price of last candle
+
+    if (trade.signal === 'LONG') {
+      if (currentPrice > entryPrice) {
+        return {
+          outcome: 'open_profit',
+          reason: 'Trade still open, in profit but TP not hit',
+          currentPrice,
+          validated: true,
+          candlesAnalyzed: candles.length,
+        };
+      } else {
+        return {
+          outcome: 'open_loss',
+          reason: 'Trade still open, in loss but SL not hit',
+          currentPrice,
+          validated: true,
+          candlesAnalyzed: candles.length,
+        };
+      }
+    } else if (trade.signal === 'SHORT') {
+      if (currentPrice < entryPrice) {
+        return {
+          outcome: 'open_profit',
+          reason: 'Trade still open, in profit but TP not hit',
+          currentPrice,
+          validated: true,
+          candlesAnalyzed: candles.length,
+        };
+      } else {
+        return {
+          outcome: 'open_loss',
+          reason: 'Trade still open, in loss but SL not hit',
+          currentPrice,
+          validated: true,
+          candlesAnalyzed: candles.length,
+        };
+      }
+    }
+
+    return {
+      outcome: 'unknown',
+      reason: 'Could not determine outcome from historical data',
+      validated: false,
+      candlesAnalyzed: candles.length,
+    };
+  } catch (error) {
+    console.error('[analyze-trades] Error validating trade with historical data:', error);
+    return {
+      outcome: 'unknown',
+      reason: `Error fetching historical data: ${error.message}`,
+      validated: false,
+      error: error.message,
+    };
+  }
 }
 
 export default async function handler(req, res) {
@@ -266,17 +393,45 @@ export default async function handler(req, res) {
       // Continue without current price
     }
 
-    // Analyze each trade
-    const analyses = trades.map(trade => {
-      const analysis = analyzeTrade(trade, currentMarketPrice);
-      
-      // Add simulation if we have current price
-      if (currentMarketPrice && trade.entryPrice) {
-        analysis.simulation = simulateTradeOutcome(trade, currentMarketPrice);
-      }
-      
-      return analysis;
-    });
+    // Analyze each trade with historical data validation
+    const useTestnet = process.env.DERIBIT_USE_TESTNET === 'true';
+    const analyses = await Promise.all(
+      trades.map(async (trade) => {
+        const analysis = analyzeTrade(trade, currentMarketPrice);
+        
+        // Validate with historical data from Deribit
+        try {
+          const validation = await validateTradeWithHistoricalData(trade, instrument, useTestnet);
+          analysis.historicalValidation = validation;
+          
+          // Update wouldHaveSucceeded based on actual outcome
+          if (validation.validated) {
+            if (validation.outcome === 'win') {
+              analysis.wouldHaveSucceeded = true;
+              analysis.confidence = 'high';
+              analysis.reason = `✅ Validated: ${validation.reason}`;
+            } else if (validation.outcome === 'loss') {
+              analysis.wouldHaveSucceeded = false;
+              analysis.confidence = 'high';
+              analysis.reason = `❌ Validated: ${validation.reason}`;
+            } else if (validation.outcome === 'open_profit' || validation.outcome === 'open_loss') {
+              // Trade is still open, but we can see it's moving in the right direction
+              analysis.wouldHaveSucceeded = validation.outcome === 'open_profit' ? true : null;
+              analysis.reason = `⏳ ${validation.reason}`;
+            }
+          }
+        } catch (error) {
+          console.warn(`[analyze-trades] Could not validate trade ${trade.id}:`, error.message);
+          analysis.historicalValidation = {
+            outcome: 'unknown',
+            reason: `Validation failed: ${error.message}`,
+            validated: false,
+          };
+        }
+        
+        return analysis;
+      })
+    );
 
     // Calculate summary statistics
     const summary = {

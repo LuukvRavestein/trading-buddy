@@ -273,3 +273,52 @@ export async function getCurrentPrice(instrument_name, useTestnet = false) {
   }
 }
 
+/**
+ * Get historical price data (candlesticks) from Deribit
+ * This uses Deribit's TradingView chart data endpoint
+ * 
+ * @param {string} instrument_name - Instrument (e.g., 'BTC-PERPETUAL')
+ * @param {number} startTimestamp - Start timestamp in milliseconds
+ * @param {number} endTimestamp - End timestamp in milliseconds
+ * @param {string} resolution - Timeframe: '60', '300', '900', '3600', '14400', '86400' (1m, 5m, 15m, 1h, 4h, 1d)
+ * @param {boolean} useTestnet - Use testnet
+ * @returns {Promise<array>} Array of candlestick data: [{t: timestamp, o: open, h: high, l: low, c: close, v: volume}, ...]
+ */
+export async function getHistoricalPriceData(instrument_name, startTimestamp, endTimestamp, resolution = '60', useTestnet = false) {
+  try {
+    // Deribit expects timestamps in milliseconds
+    const startSeconds = Math.floor(startTimestamp / 1000);
+    const endSeconds = Math.floor(endTimestamp / 1000);
+
+    const result = await apiRequest('/public/get_tradingview_chart_data', {
+      instrument_name,
+      start_timestamp: startSeconds,
+      end_timestamp: endSeconds,
+      resolution,
+    }, useTestnet);
+
+    // Deribit returns data in format: {ticks: [timestamps], status: "ok", volume: [volumes], open: [opens], close: [closes], high: [highs], low: [lows]}
+    if (!result || !result.ticks || result.ticks.length === 0) {
+      return [];
+    }
+
+    // Convert to array of candlestick objects
+    const candles = [];
+    for (let i = 0; i < result.ticks.length; i++) {
+      candles.push({
+        t: result.ticks[i] * 1000, // Convert to milliseconds
+        o: result.open[i],
+        h: result.high[i],
+        l: result.low[i],
+        c: result.close[i],
+        v: result.volume[i] || 0,
+      });
+    }
+
+    return candles;
+  } catch (error) {
+    console.error('[deribitClient] getHistoricalPriceData error:', error);
+    throw error;
+  }
+}
+

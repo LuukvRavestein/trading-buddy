@@ -363,13 +363,38 @@ const analysisHTML = `<!DOCTYPE html>
           html += \`<div class="outcome-section \${outcomeClass}">\${analysis.reason}</div>\`;
         }
 
-        if (analysis.simulation) {
-          html += '<div style="margin-top: 10px; padding: 10px; background: #0f1419; border-radius: 8px;">';
-          html += \`<strong>Simulation:</strong> \${analysis.simulation.outcome} - \${analysis.simulation.reason}\`;
-          if (analysis.simulation.exitPrice) {
-            html += \` (Exit: \${formatPrice(analysis.simulation.exitPrice)})\`;
-          } else if (analysis.simulation.currentPrice) {
-            html += \` (Current: \${formatPrice(analysis.simulation.currentPrice)})\`;
+        if (analysis.historicalValidation) {
+          const validation = analysis.historicalValidation;
+          const validationClass = validation.outcome === 'win' ? 'outcome-success' : 
+                                 validation.outcome === 'loss' ? 'outcome-failure' : 
+                                 validation.outcome === 'open_profit' ? 'outcome-success' :
+                                 validation.outcome === 'open_loss' ? 'outcome-failure' :
+                                 'outcome-unknown';
+          
+          html += '<div style="margin-top: 10px; padding: 15px; background: #0f1419; border-radius: 8px; border-left: 4px solid ' + 
+                  (validation.outcome === 'win' ? '#10b981' : validation.outcome === 'loss' ? '#ef4444' : '#f59e0b') + ';">';
+          html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">';
+          html += \`<strong style="font-size: 1.1em;">📊 Historical Validation</strong>\`;
+          if (validation.validated) {
+            html += '<span class="badge badge-success">Validated</span>';
+          } else {
+            html += '<span class="badge badge-warning">Not Validated</span>';
+          }
+          html += '</div>';
+          
+          html += \`<div class="\${validationClass}" style="margin-bottom: 8px;">\${validation.reason}</div>\`;
+          
+          if (validation.exitPrice) {
+            html += \`<div style="margin-top: 8px;"><strong>Exit Price:</strong> <span class="price">\${formatPrice(validation.exitPrice)}</span></div>\`;
+          }
+          if (validation.exitTime) {
+            html += \`<div style="margin-top: 5px;"><strong>Exit Time:</strong> <span class="timestamp">\${formatDate(validation.exitTime)}</span></div>\`;
+          }
+          if (validation.currentPrice) {
+            html += \`<div style="margin-top: 8px;"><strong>Current Price:</strong> <span class="price">\${formatPrice(validation.currentPrice)}</span></div>\`;
+          }
+          if (validation.candlesAnalyzed) {
+            html += \`<div style="margin-top: 5px; color: #6b7280; font-size: 0.9em;">Analyzed \${validation.candlesAnalyzed} candles from historical data</div>\`;
           }
           html += '</div>';
         }
