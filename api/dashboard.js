@@ -516,16 +516,27 @@ const dashboardHTML = `<!DOCTYPE html>
         // P&L column
         // Rejected trades don't have P&L (they were never executed)
         const isRejected = trade.success === false || trade.action === 'rejected';
-        const pnl = isRejected ? null : (trade.pnl || 0);
+        const pnl = trade.pnl; // Can be null for open trades or rejected trades
         let pnlDisplay = '-';
         let pnlClass = 'pnl-zero';
+        let pnlTitle = '';
         
-        if (!isRejected) {
+        if (isRejected) {
+          pnlDisplay = '-';
+          pnlTitle = 'Trade was rejected, not executed';
+        } else if (pnl === null || pnl === undefined) {
+          // Trade is still open (no exit price yet)
+          pnlDisplay = 'Open';
+          pnlClass = 'pnl-zero';
+          pnlTitle = 'Trade is still open, no P&L calculated yet';
+        } else {
+          // Trade is closed, show actual P&L
           pnlDisplay = formatPrice(pnl);
           pnlClass = pnl > 0 ? 'pnl-positive' : pnl < 0 ? 'pnl-negative' : 'pnl-zero';
+          pnlTitle = \`Closed trade P&L: \${formatPrice(pnl)}\`;
         }
         
-        html += \`<td class="price \${pnlClass}" title="\${isRejected ? 'Trade was rejected, not executed' : ''}">\${pnlDisplay}</td>\`;
+        html += \`<td class="price \${pnlClass}" title="\${pnlTitle}">\${pnlDisplay}</td>\`;
         
         html += \`<td>\${rr}</td>\`;
         

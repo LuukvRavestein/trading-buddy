@@ -18,36 +18,36 @@ import { getTrades, getStats } from '../utils/tradeStore.js';
 function calculatePnL(trade) {
   // Rejected trades don't count towards P&L (they were never executed)
   if (trade.success === false || trade.action === 'rejected') {
-    return 0;
+    return null; // Return null to indicate "no P&L" (not 0, which would be a break-even trade)
   }
 
   if (!trade.entryPrice || !trade.positionSizeUsd) {
-    return 0;
+    return null;
   }
 
   const entryPrice = parseFloat(trade.entryPrice);
   const positionSize = parseFloat(trade.positionSizeUsd);
   
   if (!entryPrice || !positionSize || entryPrice <= 0) {
-    return 0;
+    return null;
   }
 
-  // Use validated exit price if available (from TradingView alerts)
+  // Only calculate P&L if trade has been closed (has exit price)
+  // For open trades, return null to indicate "still open"
   let exitPrice = null;
   
   if (trade.exitPrice && trade.validated) {
-    // Use validated exit price from TradingView
+    // Use validated exit price from TradingView (most accurate)
     exitPrice = parseFloat(trade.exitPrice);
-  } else if (trade.takeProfit) {
-    // Fallback: assume closed at TP (profit) for paper trades
-    exitPrice = parseFloat(trade.takeProfit);
-  } else if (trade.stopLoss) {
-    // If no TP, assume it hit SL (loss)
-    exitPrice = parseFloat(trade.stopLoss);
+  } else if (trade.exitPrice) {
+    // Use exit price even if not validated yet
+    exitPrice = parseFloat(trade.exitPrice);
   }
+  // Don't use takeProfit/stopLoss as fallback - only calculate P&L for closed trades
+  // This prevents showing incorrect P&L for open trades
 
   if (!exitPrice || exitPrice <= 0 || isNaN(exitPrice)) {
-    return 0; // No exit price available
+    return null; // Trade is still open - no P&L yet
   }
 
   // Calculate P&L based on signal direction
@@ -100,11 +100,11 @@ export default async function handler(req, res) {
       pnl: calculatePnL(trade),
     }));
 
-    // Calculate total P&L (only from successful trades, rejected trades have P&L = 0)
+    // Calculate total P&L (only from closed trades with actual exit prices)
     const totalPnL = tradesWithPnL.reduce((sum, trade) => {
-      // Only count P&L from trades that were actually executed (not rejected)
-      if (trade.success !== false && trade.action !== 'rejected') {
-        return sum + (trade.pnl || 0);
+      // Only count P&L from trades that were actually executed AND closed (have exit price)
+      if (trade.success !== false && trade.action !== 'rejected' && trade.pnl !== null && trade.pnl !== undefined) {
+        return sum + trade.pnl;
       }
       return sum;
     }, 0);
