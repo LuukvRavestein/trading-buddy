@@ -30,6 +30,11 @@ async function getHistoricalPriceDataFromDeribitTrades(instrument_name, startTim
     const startSeconds = Math.floor(startTimestamp / 1000);
     const endSeconds = Math.floor(endTimestamp / 1000);
 
+    console.log(`[priceDataClient] Fetching Deribit trades for ${instrument_name}:`);
+    console.log(`  Start: ${new Date(startTimestamp).toISOString()} (${startSeconds} seconds)`);
+    console.log(`  End: ${new Date(endTimestamp).toISOString()} (${endSeconds} seconds)`);
+    console.log(`  Duration: ${Math.floor((endTimestamp - startTimestamp) / 1000 / 60)} minutes`);
+
     // Deribit historical API endpoint for trades
     // Documentation: https://support.deribit.com/hc/en-us/articles/25973087226909
     // Based on testing: GET with query parameters works, POST does not
@@ -44,6 +49,8 @@ async function getHistoricalPriceDataFromDeribitTrades(instrument_name, startTim
     });
     
     const fullUrl = `${url}?${queryParams.toString()}`;
+    console.log(`[priceDataClient] Request URL: ${fullUrl}`);
+    
     const response = await fetch(fullUrl, {
       method: 'GET',
       headers: {
@@ -53,26 +60,61 @@ async function getHistoricalPriceDataFromDeribitTrades(instrument_name, startTim
 
     if (!response.ok) {
       const errorText = await response.text();
+      console.error(`[priceDataClient] HTTP error: ${response.status} - ${errorText}`);
       throw new Error(`Deribit historical API error: ${response.status} ${errorText}`);
     }
 
     const data = await response.json();
+    console.log(`[priceDataClient] API response:`, JSON.stringify(data, null, 2).substring(0, 500));
 
     // Handle JSON-RPC response format (Deribit returns {result: {trades: [...]}, jsonrpc: "2.0"})
     if (data.error) {
+      console.error(`[priceDataClient] API error:`, data.error);
       throw new Error(`Deribit API error: ${data.error.message || data.error.code || 'Unknown error'}`);
     }
 
     const result = data.result || data;
     
-    if (!result || !result.trades || result.trades.length === 0) {
+    if (!result) {
+      console.warn(`[priceDataClient] No result in API response`);
+      return [];
+    }
+    
+    if (!result.trades) {
+      console.warn(`[priceDataClient] No 'trades' field in result:`, Object.keys(result));
+      return [];
+    }
+    
+    if (result.trades.length === 0) {
       console.warn(`[priceDataClient] No trades found for ${instrument_name} between ${new Date(startTimestamp).toISOString()} and ${new Date(endTimestamp).toISOString()}`);
+      console.warn(`[priceDataClient] Response structure:`, {
+        has_result: !!data.result,
+        has_trades: !!result.trades,
+        trades_length: result.trades?.length || 0,
+        has_more: result.has_more,
+        keys: Object.keys(result),
+      });
+      
+      // Try with a longer time range (maybe the period is too short or in the future)
+      const now = Date.now();
+      if (endTimestamp > now) {
+        console.warn(`[priceDataClient] End timestamp is in the future, adjusting to now`);
+      }
+      
       return [];
     }
 
     const trades = result.trades;
     
     console.log(`[priceDataClient] Fetched ${trades.length} trades from Deribit (has_more: ${result.has_more || false})`);
+    if (trades.length > 0) {
+      console.log(`[priceDataClient] Sample trade:`, {
+        timestamp: trades[0].timestamp,
+        price: trades[0].price,
+        amount: trades[0].amount,
+        keys: Object.keys(trades[0]),
+      });
+    }
 
     // Reconstruct OHLC candles from trades
     const candles = {};

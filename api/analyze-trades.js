@@ -200,19 +200,20 @@ async function validateTradeWithHistoricalData(trade, instrument) {
   const entryTimestamp = new Date(trade.timestamp).getTime();
   const now = Date.now();
   
-  // Only validate trades that are at least 1 minute old (to allow for data availability)
-  if (now - entryTimestamp < 60000) {
+  // Only validate trades that are at least 5 minutes old (to allow for data availability and indexing)
+  if (now - entryTimestamp < 5 * 60 * 1000) {
     return {
       outcome: 'pending',
-      reason: 'Trade too recent, waiting for historical data',
+      reason: 'Trade too recent, waiting for historical data (needs 5+ minutes)',
       validated: false,
     };
   }
 
-    // Get historical data from entry time to now (or up to 24 hours after entry, whichever is earlier)
-    // We check up to 24 hours to see if TP/SL was hit
-    const endTimestamp = Math.min(entryTimestamp + (24 * 60 * 60 * 1000), now);
-    const startTimestamp = entryTimestamp;
+  // Get historical data from entry time to now (or up to 24 hours after entry, whichever is earlier)
+  // We check up to 24 hours to see if TP/SL was hit
+  // Add a small buffer before entry time to ensure we capture the entry candle
+  const endTimestamp = Math.min(entryTimestamp + (24 * 60 * 60 * 1000), now);
+  const startTimestamp = Math.max(entryTimestamp - (5 * 60 * 1000), entryTimestamp - (24 * 60 * 60 * 1000)); // 5 minutes before entry, or max 24h ago
 
     try {
       // Use 1-minute candles for precise validation
