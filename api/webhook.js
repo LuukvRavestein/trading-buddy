@@ -164,12 +164,20 @@ export default async function handler(req, res) {
         });
       }
 
-      // Find the matching trade by entry price and signal (within 0.1% tolerance)
-      const allTrades = await getTrades({ limit: 100 });
+      // Find the matching trade by entry price and signal (within 1% tolerance for better matching)
+      const allTrades = await getTrades({ limit: 200 }); // Get more trades for better matching
+      console.log(`[webhook] [${requestId}] Searching for matching trade: entryPrice=${entryPrice}, entrySignal=${entrySignal}, exitType=${exitType}, exitPrice=${exitPrice}`);
+      console.log(`[webhook] [${requestId}] Total trades to search: ${allTrades.length}`);
+      
       const matchingTrade = allTrades.find(t => {
-        const priceMatch = Math.abs(t.entryPrice - entryPrice) / entryPrice < 0.001; // 0.1% tolerance
+        const priceMatch = Math.abs(t.entryPrice - entryPrice) / entryPrice < 0.01; // 1% tolerance (more lenient)
         const signalMatch = t.signal === entrySignal;
         const noExitYet = !t.exitPrice && !t.exitType;
+        
+        if (priceMatch && signalMatch && noExitYet) {
+          console.log(`[webhook] [${requestId}] Found potential match: tradeId=${t.id}, entryPrice=${t.entryPrice}, signal=${t.signal}`);
+        }
+        
         return priceMatch && signalMatch && noExitYet;
       });
 
@@ -203,11 +211,34 @@ export default async function handler(req, res) {
           });
         }
       } else {
+        // Log detailed info for debugging
         console.warn(`[webhook] [${requestId}] No matching trade found for exit validation`);
+        console.warn(`[webhook] [${requestId}] Exit data: entryPrice=${entryPrice}, entrySignal=${entrySignal}, exitType=${exitType}, exitPrice=${exitPrice}`);
+        console.warn(`[webhook] [${requestId}] Recent trades (first 5):`, 
+          allTrades.slice(0, 5).map(t => ({
+            id: t.id,
+            entryPrice: t.entryPrice,
+            signal: t.signal,
+            hasExit: !!(t.exitPrice || t.exitType),
+            timestamp: t.timestamp,
+          }))
+        );
+        
         return res.status(404).json({
           status: 'error',
           action: 'trade_not_found',
           reason: 'No matching trade found for this exit event',
+          debug: {
+            searchedEntryPrice: entryPrice,
+            searchedSignal: entrySignal,
+            totalTradesChecked: allTrades.length,
+            recentTrades: allTrades.slice(0, 5).map(t => ({
+              id: t.id,
+              entryPrice: t.entryPrice,
+              signal: t.signal,
+              hasExit: !!(t.exitPrice || t.exitType),
+            })),
+          },
         });
       }
     }
