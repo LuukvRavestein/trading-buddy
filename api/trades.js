@@ -108,10 +108,40 @@ export default async function handler(req, res) {
     }, 0);
 
     // Get statistics
-    const stats = await getStats();
+    let stats;
+    try {
+      stats = await getStats();
+    } catch (statsError) {
+      console.error('[trades] Error getting stats:', statsError);
+      // Return minimal stats instead of failing
+      stats = {
+        total: trades.length,
+        paper: trades.filter(t => t.mode === 'paper').length,
+        live: trades.filter(t => t.mode === 'live').length,
+        long: trades.filter(t => t.signal === 'LONG').length,
+        short: trades.filter(t => t.signal === 'SHORT').length,
+        successful: trades.filter(t => t.success !== false).length,
+        rejected: trades.filter(t => t.success === false).length,
+        successRate: trades.length > 0 ? ((trades.filter(t => t.success !== false).length / trades.length) * 100).toFixed(1) : '0.0',
+      };
+    }
     
     // Add total P&L to stats
-    stats.totalPnL = Math.round(totalPnL * 100) / 100;
+    if (stats) {
+      stats.totalPnL = Math.round(totalPnL * 100) / 100;
+    } else {
+      stats = {
+        total: 0,
+        paper: 0,
+        live: 0,
+        long: 0,
+        short: 0,
+        successful: 0,
+        rejected: 0,
+        successRate: '0.0',
+        totalPnL: 0,
+      };
+    }
 
     return res.status(200).json({
       status: 'ok',
