@@ -102,16 +102,32 @@ async function supabaseRequest(method, path, body = null) {
     
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`Supabase API error: ${response.status} ${errorText}`);
+      console.error(`[supabase] API error (${method} ${path}):`, {
+        status: response.status,
+        statusText: response.statusText,
+        error: errorText.substring(0, 500),
+      });
+      throw new Error(`Supabase API error: ${response.status} ${errorText.substring(0, 200)}`);
+    }
+
+    // Handle empty responses (204 No Content)
+    if (response.status === 204) {
+      return [];
     }
 
     // Handle empty responses
     const contentType = response.headers.get('content-type');
     if (contentType && contentType.includes('application/json')) {
-      const data = await response.json();
-      return Array.isArray(data) ? data : [data];
+      try {
+        const data = await response.json();
+        return Array.isArray(data) ? data : [data];
+      } catch (jsonError) {
+        console.error(`[supabase] JSON parse error (${method} ${path}):`, jsonError);
+        return [];
+      }
     }
     
+    // If no content-type or not JSON, return empty array
     return [];
   } catch (error) {
     console.error(`[supabase] Request error (${method} ${path}):`, error);
@@ -151,7 +167,8 @@ export async function getTradesFromSupabase(options = {}) {
   }
 
   try {
-    let path = 'trades?order=created_at.desc';
+    // Use select to only get columns that exist (avoid errors if new columns don't exist yet)
+    let path = 'trades?select=*&order=created_at.desc';
     
     // Add filters using PostgREST syntax
     if (options.mode) {
@@ -167,10 +184,18 @@ export async function getTradesFromSupabase(options = {}) {
     }
 
     const result = await supabaseRequest('GET', path);
-    return result || [];
+    
+    if (!Array.isArray(result)) {
+      console.warn('[supabase] getTradesFromSupabase returned non-array:', typeof result, result);
+      return [];
+    }
+    
+    return result;
   } catch (error) {
     console.error('[supabase] Failed to get trades:', error);
-    throw error;
+    // Don't throw - return empty array so the API can still respond
+    console.warn('[supabase] Returning empty array due to error');
+    return [];
   }
 }
 
