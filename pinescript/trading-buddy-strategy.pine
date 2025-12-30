@@ -226,7 +226,7 @@ var int lastEntryBar = na
 var bool exitAlertSent = false
 
 // Store entry data when signal is generated
-// Only update if no active trade is being tracked (allows new signals to overwrite completed trades)
+// Also store when strategy.entry is called (for strategy engine tracking)
 if (longSignal or shortSignal) and barstate.isconfirmed
     // Update tracking variables (new signal always overwrites, which is OK for paper trading)
     lastEntryPrice := entryPrice
@@ -235,6 +235,25 @@ if (longSignal or shortSignal) and barstate.isconfirmed
     lastSignalType := longSignal ? "LONG" : "SHORT"
     lastEntryBar := bar_index
     exitAlertSent := false // Reset exit flag for new trade
+
+// Also track when strategy actually enters (in case signal and strategy entry differ)
+if strategy.position_size != 0 and na(lastEntryPrice)
+    // Strategy has a position but we don't have tracking - try to get from strategy
+    if strategy.position_size > 0
+        // LONG position
+        lastEntryPrice := strategy.position_avg_price
+        lastSignalType := "LONG"
+    else if strategy.position_size < 0
+        // SHORT position
+        lastEntryPrice := strategy.position_avg_price
+        lastSignalType := "SHORT"
+    
+    // Try to get SL/TP from current signal prices (if available)
+    if not na(entryPrice) and not na(slPrice) and not na(tpPrice)
+        lastSLPrice := slPrice
+        lastTPPrice := tpPrice
+        lastEntryBar := bar_index
+        exitAlertSent := false
 
 // Detect if TP or SL was hit (for validation alerts)
 // Check every bar, not just when signal is generated
@@ -290,6 +309,55 @@ if strategy.position_size < 0
 // --- STRATEGY TRADE EXIT DETECTION (uses TradingView's strategy engine) ---
 // This is more reliable than manual detection because TradingView knows exactly when TP/SL is hit
 var int lastClosedTradeId = -1
+
+// Also check if strategy position was closed (position_size went to 0)
+var float lastPositionSize = 0.0
+if strategy.position_size == 0 and lastPositionSize != 0
+    // Position was just closed - this is more reliable than waiting for closedtrades
+    // Get the most recent closed trade if available
+    if strategy.closedtrades > 0
+        closedTradeId = strategy.closedtrades - 1
+        
+        // Get exit information from the closed trade
+        exitPrice = strategy.closedtrades.exit_price(closedTradeId)
+        exitTime = strategy.closedtrades.exit_time(closedTradeId)
+        entryPriceFromStrategy = strategy.closedtrades.entry_price(closedTradeId)
+        entryTime = strategy.closedtrades.entry_time(closedTradeId)
+        entrySignalFromStrategy = strategy.closedtrades.entry_id(closedTradeId) // "LONG" or "SHORT"
+        
+        // Determine exit type based on profit/loss
+        string exitTypeFromStrategy = "UNKNOWN"
+        if entrySignalFromStrategy == "LONG"
+            if exitPrice >= entryPriceFromStrategy
+                exitTypeFromStrategy := "TAKE_PROFIT"
+            else
+                exitTypeFromStrategy := "STOP_LOSS"
+        else if entrySignalFromStrategy == "SHORT"
+            if exitPrice <= entryPriceFromStrategy
+                exitTypeFromStrategy := "TAKE_PROFIT"
+            else
+                exitTypeFromStrategy := "STOP_LOSS"
+        
+        // Send exit alert
+        if exitPrice > 0 and entryPriceFromStrategy > 0
+            string strategyExitPayload = '{"signal":"TRADE_EXIT","type":"' + exitTypeFromStrategy + '","symbol":"' + syminfo.ticker + '","entry_price":' + str.tostring(entryPriceFromStrategy, "#.##") + ',"exit_price":' + str.tostring(exitPrice, "#.##") + ',"entry_signal":"' + entrySignalFromStrategy + '","entry_time":' + str.tostring(entryTime) + ',"exit_time":' + str.tostring(exitTime) + ',"timeframe":"' + str.tostring(timeframe.period) + '","time":"' + str.tostring(time) + '","source":"strategy_engine"'
+            
+            if webhookSecret != ""
+                strategyExitPayload := strategyExitPayload + ',"secret":"' + webhookSecret + '"'
+            
+            strategyExitPayload := strategyExitPayload + '}'
+            
+            alert(strategyExitPayload, alert.freq_once_per_bar)
+            
+            // Reset tracking
+            lastEntryPrice := na
+            lastSLPrice := na
+            lastTPPrice := na
+            lastSignalType := na
+            exitAlertSent := true
+
+// Update last position size
+lastPositionSize := strategy.position_size
 
 // Check if a new trade was closed (strategy.closedtrades increased)
 if strategy.closedtrades > lastClosedTradeId
