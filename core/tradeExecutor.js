@@ -131,7 +131,18 @@ export async function executeTrade(signal, options = {}) {
       };
     }
 
-    // Step 3: Run risk checks
+    // Step 3: Check if there is already an open trade
+    // Only allow one open position at a time (LONG or SHORT)
+    const { getTrades } = await import('../utils/tradeStore.js');
+    const allTrades = await getTrades({ limit: 100 });
+    const hasOpenTrade = allTrades.some(t => 
+      t.success !== false && 
+      t.action !== 'rejected' && 
+      !t.exitPrice && 
+      !t.exitType
+    );
+
+    // Step 4: Run risk checks
     const riskCheck = canOpenNewTrade({
       equity,
       entryPrice: signal.entry_price,
@@ -139,6 +150,7 @@ export async function executeTrade(signal, options = {}) {
       takeProfitPrice: signal.tp_price,
       currentDailyPnL,
       tradesToday,
+      hasOpenTrade,
     });
 
     if (!riskCheck.allowed) {
