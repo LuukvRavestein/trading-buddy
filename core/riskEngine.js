@@ -113,6 +113,7 @@ export function canOpenNewTrade(context) {
     maxTradesPerDay = parseInt(process.env.MAX_TRADES_PER_DAY) || 5,
     maxSLDistancePercent = 0.6, // Hardcoded as per strategy rules
     minRiskReward = 2.0, // Hardcoded as per strategy rules (1:2)
+    hasOpenTrade = false, // Whether there is already an open trade
   } = context;
 
   // Validation: required parameters
@@ -124,6 +125,14 @@ export function canOpenNewTrade(context) {
   }
   if (!stopLossPrice || stopLossPrice <= 0) {
     return { allowed: false, reason: 'Invalid stop loss price: must be positive' };
+  }
+
+  // Check 0: Only one open position at a time
+  if (hasOpenTrade) {
+    return {
+      allowed: false,
+      reason: 'There is already an open trade. Close the current position (TP or SL) before opening a new one.',
+    };
   }
 
   // Check 1: Max trades per day
