@@ -287,6 +287,61 @@ if strategy.position_size > 0
 if strategy.position_size < 0
     strategy.exit("SHORT EXIT", "SHORT", stop=slPrice, limit=tpPrice)
 
+// --- STRATEGY TRADE EXIT DETECTION (uses TradingView's strategy engine) ---
+// This is more reliable than manual detection because TradingView knows exactly when TP/SL is hit
+var int lastClosedTradeId = -1
+
+// Check if a new trade was closed (strategy.closedtrades increased)
+if strategy.closedtrades > lastClosedTradeId
+    // Get the most recent closed trade
+    closedTradeId = strategy.closedtrades - 1
+    
+    // Get exit information from the closed trade
+    exitPrice = strategy.closedtrades.exit_price(closedTradeId)
+    exitTime = strategy.closedtrades.exit_time(closedTradeId)
+    entryPrice = strategy.closedtrades.entry_price(closedTradeId)
+    entryTime = strategy.closedtrades.entry_time(closedTradeId)
+    entrySignal = strategy.closedtrades.entry_id(closedTradeId) // "LONG" or "SHORT"
+    exitReason = strategy.closedtrades.exit_id(closedTradeId) // "LONG EXIT" or "SHORT EXIT"
+    
+    // Determine exit type (TP or SL) based on exit reason and prices
+    // For LONG: if exit was at TP, exitPrice should be close to TP; if SL, close to SL
+    // For SHORT: if exit was at TP, exitPrice should be close to TP; if SL, close to SL
+    string exitType = "UNKNOWN"
+    
+    // We need to get the TP and SL from when the trade was entered
+    // Since we don't have that stored, we'll use a heuristic:
+    // If exit was profitable, it's likely TP; if loss, likely SL
+    // But we can also check the exit reason string
+    if str.contains(exitReason, "EXIT")
+        // Try to determine from entry signal
+        if entrySignal == "LONG"
+            // For LONG: TP is above entry, SL is below entry
+            if exitPrice >= entryPrice
+                exitType := "TAKE_PROFIT" // Likely TP (profitable)
+            else
+                exitType := "STOP_LOSS" // Likely SL (loss)
+        else if entrySignal == "SHORT"
+            // For SHORT: TP is below entry, SL is above entry
+            if exitPrice <= entryPrice
+                exitType := "TAKE_PROFIT" // Likely TP (profitable)
+            else
+                exitType := "STOP_LOSS" // Likely SL (loss)
+    
+    // Send exit alert with strategy trade data
+    if exitPrice > 0 and entryPrice > 0
+        string strategyExitPayload = '{"signal":"TRADE_EXIT","type":"' + exitType + '","symbol":"' + syminfo.ticker + '","entry_price":' + str.tostring(entryPrice, "#.##") + ',"exit_price":' + str.tostring(exitPrice, "#.##") + ',"entry_signal":"' + entrySignal + '","entry_time":' + str.tostring(entryTime) + ',"exit_time":' + str.tostring(exitTime) + ',"timeframe":"' + str.tostring(timeframe.period) + '","time":"' + str.tostring(time) + '","source":"strategy_engine"'
+        
+        if webhookSecret != ""
+            strategyExitPayload := strategyExitPayload + ',"secret":"' + webhookSecret + '"'
+        
+        strategyExitPayload := strategyExitPayload + '}'
+        
+        alert(strategyExitPayload, alert.freq_once_per_bar)
+        
+        // Update last closed trade ID
+        lastClosedTradeId := strategy.closedtrades
+
 // --- VISUALIZE ZONES ---
 // Draw most recent supply zone
 if array.size(supplyZones) > 0
