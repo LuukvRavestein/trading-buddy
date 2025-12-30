@@ -471,9 +471,9 @@ const analysisHTML = `<!DOCTYPE html>
 
     // Open TradingView chart with trade markers
     function openTradingViewChart(instrument, entryPrice, stopLoss, takeProfit, signal, timestamp) {
-      // Use Deribit BTC Perpetual Futures Contract symbol: BTOUSD.P
-      // TradingView format: DERIBIT:BTOUSD.P
-      const tvSymbol = 'DERIBIT:BTOUSD.P';
+      // Use Deribit BTC Perpetual Futures Contract symbol
+      // TradingView format: DERIBIT:BTCUSD.P
+      const tvSymbol = 'DERIBIT:BTCUSD.P';
       
       // Create TradingView chart URL
       // Open in new window with the chart
