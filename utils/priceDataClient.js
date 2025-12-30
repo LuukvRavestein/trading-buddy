@@ -38,15 +38,27 @@ async function getHistoricalPriceDataFromDeribitTrades(instrument_name, startTim
     // Deribit historical API endpoint for trades
     // Documentation: https://support.deribit.com/hc/en-us/articles/25973087226909
     // Based on testing: GET with query parameters works, POST does not
+    
+    // Normalize instrument name for Deribit Historical API
+    // The historical API might use different naming than the main API
+    let normalizedInstrument = instrument_name;
+    if (instrument_name.includes('BTCUSD') || instrument_name.includes('BTCUSD.P')) {
+      normalizedInstrument = 'BTC-PERPETUAL';
+    } else if (instrument_name === 'BTC-PERPETUAL') {
+      normalizedInstrument = 'BTC-PERPETUAL'; // Keep as is
+    }
+    
     const url = `${DERIBIT_HISTORY_API_BASE}/public/get_last_trades_by_instrument_and_time`;
     
     // Use GET with query parameters (this is what works)
     const queryParams = new URLSearchParams({
-      instrument_name,
+      instrument_name: normalizedInstrument,
       start_timestamp: startSeconds.toString(),
       end_timestamp: endSeconds.toString(),
       count: '10000', // Max trades to fetch (Deribit limit)
     });
+    
+    console.log(`[priceDataClient] Normalized instrument: ${instrument_name} -> ${normalizedInstrument}`);
     
     const fullUrl = `${url}?${queryParams.toString()}`;
     console.log(`[priceDataClient] Request URL: ${fullUrl}`);
