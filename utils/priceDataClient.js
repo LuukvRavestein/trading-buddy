@@ -3,7 +3,14 @@
  * 
  * Fetches historical price data from various sources
  * Falls back to alternative APIs if Deribit is unavailable
+ * 
+ * Sources (in order of preference):
+ * 1. Binance API - Best OHLC data, free, no auth
+ * 2. CoinGecko API - Price data only, free, no auth
+ * 3. Deribit Historical Trades API - Reconstructs OHLC from trades (if available)
  */
+
+const DERIBIT_HISTORY_API_BASE = 'https://history.deribit.com/api/v2';
 
 /**
  * Get historical price data from CoinGecko API (free, no auth required)
@@ -133,6 +140,95 @@ async function getHistoricalPriceDataFromBinance(symbol, startTimestamp, endTime
 }
 
 /**
+ * Get historical trades from Deribit and reconstruct OHLC candles
+ * Note: This is less efficient than direct OHLC data, but uses Deribit's actual trade data
+ * 
+ * @param {string} instrument_name - Instrument (e.g., 'BTC-PERPETUAL')
+ * @param {number} startTimestamp - Start timestamp in milliseconds
+ * @param {number} endTimestamp - End timestamp in milliseconds
+ * @param {number} intervalMs - Interval in milliseconds for candles
+ * @returns {Promise<array>} Array of candlestick data
+ */
+async function getHistoricalPriceDataFromDeribitTrades(instrument_name, startTimestamp, endTimestamp, intervalMs = 60000) {
+  try {
+    const startSeconds = Math.floor(startTimestamp / 1000);
+    const endSeconds = Math.floor(endTimestamp / 1000);
+
+    // Deribit historical API endpoint for trades
+    const url = `${DERIBIT_HISTORY_API_BASE}/public/get_last_trades_by_instrument_and_time`;
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+
+    // Note: Deribit historical API might require different parameters or authentication
+    // This is a placeholder - may need adjustment based on actual API behavior
+    const params = new URLSearchParams({
+      instrument_name,
+      start_timestamp: startSeconds.toString(),
+      end_timestamp: endSeconds.toString(),
+      include_old: 'true',
+      count: '10000', // Max trades to fetch
+    });
+
+    const fullUrl = `${url}?${params.toString()}`;
+    const finalResponse = await fetch(fullUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!finalResponse.ok) {
+      throw new Error(`Deribit historical API error: ${finalResponse.status}`);
+    }
+
+    const data = await finalResponse.json();
+
+    if (data.error || !data.result || !data.result.trades || data.result.trades.length === 0) {
+      return [];
+    }
+
+    const trades = data.result.trades;
+
+    // Reconstruct OHLC candles from trades
+    const candles = {};
+    const intervalSeconds = intervalMs / 1000;
+
+    for (const trade of trades) {
+      const tradeTime = trade.timestamp;
+      const candleKey = Math.floor(tradeTime / intervalSeconds) * intervalSeconds;
+      
+      if (!candles[candleKey]) {
+        candles[candleKey] = {
+          t: candleKey * 1000, // Convert to milliseconds
+          o: trade.price,
+          h: trade.price,
+          l: trade.price,
+          c: trade.price,
+          v: trade.amount || 0,
+        };
+      } else {
+        const candle = candles[candleKey];
+        candle.h = Math.max(candle.h, trade.price);
+        candle.l = Math.min(candle.l, trade.price);
+        candle.c = trade.price; // Close is last trade price
+        candle.v += trade.amount || 0;
+      }
+    }
+
+    // Convert to array and sort by timestamp
+    return Object.values(candles).sort((a, b) => a.t - b.t);
+  } catch (error) {
+    console.error('[priceDataClient] Deribit trades error:', error);
+    throw error;
+  }
+}
+
+/**
  * Get historical price data with automatic fallback
  * Tries multiple sources in order of preference
  * 
@@ -146,21 +242,21 @@ export async function getHistoricalPriceData(instrument_name, startTimestamp, en
   // Extract symbol from instrument name (e.g., 'BTC-PERPETUAL' -> 'BTC')
   const symbol = instrument_name.replace('-PERPETUAL', '').replace('-', '').toUpperCase();
   
-  // Map resolution to Binance interval
+  // Map resolution to Binance interval and milliseconds
   const resolutionMap = {
-    '60': '1m',
-    '300': '5m',
-    '900': '15m',
-    '3600': '1h',
-    '14400': '4h',
-    '86400': '1d',
+    '60': { binance: '1m', ms: 60000 },
+    '300': { binance: '5m', ms: 300000 },
+    '900': { binance: '15m', ms: 900000 },
+    '3600': { binance: '1h', ms: 3600000 },
+    '14400': { binance: '4h', ms: 14400000 },
+    '86400': { binance: '1d', ms: 86400000 },
   };
-  const binanceInterval = resolutionMap[resolution] || '1m';
+  const resolutionInfo = resolutionMap[resolution] || { binance: '1m', ms: 60000 };
 
-  // Try Binance first (most accurate, has OHLC data)
+  // Try Binance first (most accurate, has OHLC data, fastest)
   try {
     console.log(`[priceDataClient] Trying Binance for ${symbol}...`);
-    const binanceData = await getHistoricalPriceDataFromBinance(symbol, startTimestamp, endTimestamp, binanceInterval);
+    const binanceData = await getHistoricalPriceDataFromBinance(symbol, startTimestamp, endTimestamp, resolutionInfo.binance);
     if (binanceData && binanceData.length > 0) {
       console.log(`[priceDataClient] Successfully fetched ${binanceData.length} candles from Binance`);
       return binanceData;
@@ -169,7 +265,7 @@ export async function getHistoricalPriceData(instrument_name, startTimestamp, en
     console.warn(`[priceDataClient] Binance failed: ${error.message}`);
   }
 
-  // Fallback to CoinGecko (less accurate, only price data)
+  // Fallback to CoinGecko (less accurate, only price data, but reliable)
   try {
     console.log(`[priceDataClient] Trying CoinGecko for ${symbol}...`);
     const coinGeckoData = await getHistoricalPriceDataFromCoinGecko(symbol, startTimestamp, endTimestamp);
@@ -179,6 +275,19 @@ export async function getHistoricalPriceData(instrument_name, startTimestamp, en
     }
   } catch (error) {
     console.warn(`[priceDataClient] CoinGecko failed: ${error.message}`);
+  }
+
+  // Last resort: Try Deribit historical trades API (slower, reconstructs OHLC from trades)
+  // Note: This may not work without proper authentication or API access
+  try {
+    console.log(`[priceDataClient] Trying Deribit historical trades for ${instrument_name}...`);
+    const deribitData = await getHistoricalPriceDataFromDeribitTrades(instrument_name, startTimestamp, endTimestamp, resolutionInfo.ms);
+    if (deribitData && deribitData.length > 0) {
+      console.log(`[priceDataClient] Successfully fetched ${deribitData.length} candles from Deribit trades`);
+      return deribitData;
+    }
+  } catch (error) {
+    console.warn(`[priceDataClient] Deribit historical trades failed: ${error.message}`);
   }
 
   // If all fail, return empty array
