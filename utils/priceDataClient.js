@@ -32,48 +32,24 @@ async function getHistoricalPriceDataFromDeribitTrades(instrument_name, startTim
 
     // Deribit historical API endpoint for trades
     // Documentation: https://support.deribit.com/hc/en-us/articles/25973087226909
+    // Based on testing: GET with query parameters works, POST does not
     const url = `${DERIBIT_HISTORY_API_BASE}/public/get_last_trades_by_instrument_and_time`;
     
-    // Deribit uses POST for JSON-RPC, but historical API might use GET with query params
-    // Try POST first (standard Deribit API format)
-    const params = {
+    // Use GET with query parameters (this is what works)
+    const queryParams = new URLSearchParams({
       instrument_name,
-      start_timestamp: startSeconds,
-      end_timestamp: endSeconds,
-      count: 10000, // Max trades to fetch (Deribit limit)
-    };
-
-    // Try POST first (JSON-RPC format)
-    let response = await fetch(url, {
-      method: 'POST',
+      start_timestamp: startSeconds.toString(),
+      end_timestamp: endSeconds.toString(),
+      count: '10000', // Max trades to fetch (Deribit limit)
+    });
+    
+    const fullUrl = `${url}?${queryParams.toString()}`;
+    const response = await fetch(fullUrl, {
+      method: 'GET',
       headers: {
-        'Content-Type': 'application/json',
         'Accept': 'application/json',
       },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'public/get_last_trades_by_instrument_and_time',
-        params: params,
-        id: 1,
-      }),
     });
-
-    // If POST fails, try GET with query params
-    if (!response.ok) {
-      const queryParams = new URLSearchParams({
-        instrument_name,
-        start_timestamp: startSeconds.toString(),
-        end_timestamp: endSeconds.toString(),
-        count: '10000',
-      });
-      const getUrl = `${url}?${queryParams.toString()}`;
-      response = await fetch(getUrl, {
-        method: 'GET',
-        headers: {
-          'Accept': 'application/json',
-        },
-      });
-    }
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -82,19 +58,21 @@ async function getHistoricalPriceDataFromDeribitTrades(instrument_name, startTim
 
     const data = await response.json();
 
-    // Handle JSON-RPC response format
-    const result = data.result || data;
-    
+    // Handle JSON-RPC response format (Deribit returns {result: {trades: [...]}, jsonrpc: "2.0"})
     if (data.error) {
       throw new Error(`Deribit API error: ${data.error.message || data.error.code || 'Unknown error'}`);
     }
 
+    const result = data.result || data;
+    
     if (!result || !result.trades || result.trades.length === 0) {
       console.warn(`[priceDataClient] No trades found for ${instrument_name} between ${new Date(startTimestamp).toISOString()} and ${new Date(endTimestamp).toISOString()}`);
       return [];
     }
 
     const trades = result.trades;
+    
+    console.log(`[priceDataClient] Fetched ${trades.length} trades from Deribit (has_more: ${result.has_more || false})`);
 
     // Reconstruct OHLC candles from trades
     const candles = {};
