@@ -10,7 +10,8 @@
  */
 
 import { getTrades } from '../utils/tradeStore.js';
-import { getCurrentPrice, getHistoricalPriceData } from '../utils/deribitClient.js';
+import { getCurrentPrice } from '../utils/deribitClient.js';
+import { getHistoricalPriceData } from '../utils/priceDataClient.js';
 
 /**
  * Analyze a single trade
@@ -187,7 +188,7 @@ function analyzeTrade(trade, currentMarketPrice = null) {
  * @param {boolean} useTestnet - Use testnet
  * @returns {Promise<object>} Validation result with actual outcome
  */
-async function validateTradeWithHistoricalData(trade, instrument, useTestnet = false) {
+async function validateTradeWithHistoricalData(trade, instrument) {
   if (!trade.entryPrice || !trade.timestamp) {
     return { 
       outcome: 'unknown', 
@@ -208,20 +209,20 @@ async function validateTradeWithHistoricalData(trade, instrument, useTestnet = f
     };
   }
 
-  // Get historical data from entry time to now (or up to 24 hours after entry, whichever is earlier)
-  // We check up to 24 hours to see if TP/SL was hit
-  const endTimestamp = Math.min(entryTimestamp + (24 * 60 * 60 * 1000), now);
-  const startTimestamp = entryTimestamp;
+    // Get historical data from entry time to now (or up to 24 hours after entry, whichever is earlier)
+    // We check up to 24 hours to see if TP/SL was hit
+    const endTimestamp = Math.min(entryTimestamp + (24 * 60 * 60 * 1000), now);
+    const startTimestamp = entryTimestamp;
 
-  try {
-    // Use 1-minute candles for precise validation
-    const candles = await getHistoricalPriceData(
-      instrument,
-      startTimestamp,
-      endTimestamp,
-      '60', // 1-minute resolution
-      useTestnet
-    );
+    try {
+      // Use 1-minute candles for precise validation
+      // Note: priceDataClient uses alternative APIs (Binance/CoinGecko) since Deribit historical data is unavailable
+      const candles = await getHistoricalPriceData(
+        instrument,
+        startTimestamp,
+        endTimestamp,
+        '60' // 1-minute resolution
+      );
 
     if (!candles || candles.length === 0) {
       return {
@@ -399,9 +400,9 @@ export default async function handler(req, res) {
       trades.map(async (trade) => {
         const analysis = analyzeTrade(trade, currentMarketPrice);
         
-        // Validate with historical data from Deribit (optional, won't fail if unavailable)
+        // Validate with historical data (uses Binance/CoinGecko as fallback since Deribit historical data is unavailable)
         try {
-          const validation = await validateTradeWithHistoricalData(trade, instrument, useTestnet);
+          const validation = await validateTradeWithHistoricalData(trade, instrument);
           analysis.historicalValidation = validation;
           
           // Update wouldHaveSucceeded based on actual outcome
