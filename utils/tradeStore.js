@@ -13,6 +13,7 @@ import {
   insertTrade as insertTradeToSupabase,
   getTradesFromSupabase,
   getStatsFromSupabase,
+  updateTrade as updateTradeInSupabase,
 } from './supabaseClient.js';
 
 // In-memory store (fallback, resets on serverless function restart)
@@ -245,8 +246,6 @@ export async function getLatestTrade() {
  * @returns {Promise<object>} Updated trade
  */
 export async function updateTradeExit(tradeId, exitData) {
-  const { updateTrade as updateTradeInSupabase } = await import('./supabaseClient.js');
-  
   // Try to update in Supabase first
   if (isSupabaseConfigured()) {
     try {
