@@ -12,7 +12,7 @@
  */
 
 import { executeTrade, getAccountState } from '../core/tradeExecutor.js';
-import { saveTrade } from '../utils/tradeStore.js';
+import { saveTrade, getTrades, updateTradeExit } from '../utils/tradeStore.js';
 
 /**
  * Validate webhook secret if configured
