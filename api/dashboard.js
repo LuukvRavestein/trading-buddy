@@ -636,7 +636,21 @@ const dashboardHTML = `<!DOCTYPE html>
         params.append('limit', '100');
         
         const response = await fetch(\`/api/trades?\${params.toString()}\`);
-        const data = await response.json();
+        
+        // Check if response is OK
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(\`HTTP \${response.status}: \${errorText.substring(0, 200)}\`);
+        }
+        
+        // Try to parse as JSON
+        let data;
+        try {
+          data = await response.json();
+        } catch (jsonError) {
+          const responseText = await response.text();
+          throw new Error(\`Invalid JSON response: \${responseText.substring(0, 200)}\`);
+        }
         
         if (data.status === 'ok') {
           updateStats(data.stats);

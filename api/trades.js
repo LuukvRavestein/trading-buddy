@@ -110,9 +110,11 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     console.error('[trades] Error:', error);
+    console.error('[trades] Error stack:', error.stack);
     return res.status(500).json({
       status: 'error',
       reason: `Server error: ${error.message}`,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined,
     });
   }
 }
