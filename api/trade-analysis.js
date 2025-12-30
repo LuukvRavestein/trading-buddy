@@ -244,6 +244,7 @@ const analysisHTML = `<!DOCTYPE html>
     <div id="analyses-container"></div>
   </div>
 
+  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
   <script>
     function formatPrice(price) {
       if (!price) return '-';
@@ -374,9 +375,11 @@ const analysisHTML = `<!DOCTYPE html>
           html += '<div style="margin-top: 10px; padding: 15px; background: #0f1419; border-radius: 8px; border-left: 4px solid ' + 
                   (validation.outcome === 'win' ? '#10b981' : validation.outcome === 'loss' ? '#ef4444' : '#f59e0b') + ';">';
           html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">';
-          html += \`<strong style="font-size: 1.1em;">📊 Historical Validation</strong>\`;
+          html += \`<strong style="font-size: 1.1em;">📊 Trade Validation</strong>\`;
           if (validation.validated) {
-            html += '<span class="badge badge-success">Validated</span>';
+            html += '<span class="badge badge-success">Historical Data</span>';
+          } else if (validation.method === 'current_price_check') {
+            html += '<span class="badge badge-warning">Current Price Check</span>';
           } else {
             html += '<span class="badge badge-warning">Not Validated</span>';
           }
@@ -396,6 +399,12 @@ const analysisHTML = `<!DOCTYPE html>
           if (validation.candlesAnalyzed) {
             html += \`<div style="margin-top: 5px; color: #6b7280; font-size: 0.9em;">Analyzed \${validation.candlesAnalyzed} candles from historical data</div>\`;
           }
+          
+          // Add TradingView chart button
+          if (analysis.entryPrice && analysis.stopLoss && analysis.takeProfit) {
+            html += \`<div style="margin-top: 15px;"><button onclick="openTradingViewChart('\${analysis.instrument}', \${analysis.entryPrice}, \${analysis.stopLoss}, \${analysis.takeProfit}, '\${analysis.signal}', '\${analysis.timestamp}')" style="background: #3b82f6; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: 600;">📈 View on TradingView</button></div>\`;
+          }
+          
           html += '</div>';
         }
 
@@ -458,6 +467,25 @@ const analysisHTML = `<!DOCTYPE html>
           \`<div class="error">Error loading analysis: \${error.message}</div>\`;
         console.error('Error loading analysis:', error);
       }
+    }
+
+    // Open TradingView chart with trade markers
+    function openTradingViewChart(instrument, entryPrice, stopLoss, takeProfit, signal, timestamp) {
+      // Convert instrument name to TradingView format
+      // BTC-PERPETUAL -> DERIBIT:BTCUSDC (or similar)
+      let tvSymbol = 'DERIBIT:' + instrument.replace('-PERPETUAL', 'USDC');
+      
+      // Create TradingView chart URL with markers
+      const entryTime = new Date(timestamp).getTime() / 1000; // TradingView uses Unix timestamp in seconds
+      
+      // TradingView widget URL
+      const widgetUrl = \`https://www.tradingview.com/widgetembed/?frameElementId=tradingview_\${Date.now()}&symbol=\${encodeURIComponent(tvSymbol)}&interval=5&theme=dark&style=1&locale=en&toolbar_bg=#1a1f3a&enable_publishing=false&hide_top_toolbar=false&hide_legend=false&save_image=false&studies=%5B%5D&support_host=https%3A%2F%2Fwww.tradingview.com\`;
+      
+      // Open in new window
+      window.open(\`https://www.tradingview.com/chart/?symbol=\${encodeURIComponent(tvSymbol)}&interval=5\`, '_blank');
+      
+      // Also show info
+      alert(\`TradingView Chart\\n\\nSymbol: \${tvSymbol}\\nEntry: $\${entryPrice.toLocaleString()}\\nStop Loss: $\${stopLoss.toLocaleString()}\\nTake Profit: $\${takeProfit.toLocaleString()}\\nSignal: \${signal}\\n\\nNote: Manually add markers on TradingView to see if TP/SL was hit.\`);
     }
 
     // Load on page load

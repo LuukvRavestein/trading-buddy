@@ -226,10 +226,84 @@ async function validateTradeWithHistoricalData(trade, instrument) {
       );
 
     if (!candles || candles.length === 0) {
+      // Fallback: Use current price for simple validation if historical data unavailable
+      // This is less accurate but works for paper trades that weren't actually placed
+      try {
+        const useTestnet = process.env.DERIBIT_USE_TESTNET === 'true';
+        const currentPrice = await getCurrentPrice(instrument, useTestnet);
+        
+        if (currentPrice) {
+          const entryPrice = trade.entryPrice;
+          const stopLoss = trade.stopLoss;
+          const takeProfit = trade.takeProfit;
+          
+          if (trade.signal === 'LONG') {
+            if (takeProfit && currentPrice >= takeProfit) {
+              return {
+                outcome: 'win',
+                reason: `Current price (${currentPrice}) is above take profit (${takeProfit}) - trade would have hit TP`,
+                exitPrice: takeProfit,
+                validated: false, // Not validated with historical data, but current price suggests win
+                currentPrice,
+                method: 'current_price_check',
+              };
+            } else if (stopLoss && currentPrice <= stopLoss) {
+              return {
+                outcome: 'loss',
+                reason: `Current price (${currentPrice}) is below stop loss (${stopLoss}) - trade would have hit SL`,
+                exitPrice: stopLoss,
+                validated: false,
+                currentPrice,
+                method: 'current_price_check',
+              };
+            } else {
+              return {
+                outcome: currentPrice > entryPrice ? 'open_profit' : 'open_loss',
+                reason: `Current price (${currentPrice}) is between entry (${entryPrice}) and TP/SL. Trade still open.`,
+                currentPrice,
+                validated: false,
+                method: 'current_price_check',
+              };
+            }
+          } else if (trade.signal === 'SHORT') {
+            if (takeProfit && currentPrice <= takeProfit) {
+              return {
+                outcome: 'win',
+                reason: `Current price (${currentPrice}) is below take profit (${takeProfit}) - trade would have hit TP`,
+                exitPrice: takeProfit,
+                validated: false,
+                currentPrice,
+                method: 'current_price_check',
+              };
+            } else if (stopLoss && currentPrice >= stopLoss) {
+              return {
+                outcome: 'loss',
+                reason: `Current price (${currentPrice}) is above stop loss (${stopLoss}) - trade would have hit SL`,
+                exitPrice: stopLoss,
+                validated: false,
+                currentPrice,
+                method: 'current_price_check',
+              };
+            } else {
+              return {
+                outcome: currentPrice < entryPrice ? 'open_profit' : 'open_loss',
+                reason: `Current price (${currentPrice}) is between entry (${entryPrice}) and TP/SL. Trade still open.`,
+                currentPrice,
+                validated: false,
+                method: 'current_price_check',
+              };
+            }
+          }
+        }
+      } catch (error) {
+        console.warn(`[analyze-trades] Could not get current price for fallback validation:`, error.message);
+      }
+      
       return {
         outcome: 'unknown',
-        reason: 'No historical data available',
+        reason: 'No historical data available (paper trades not in Deribit database). Use TradingView chart for visual validation.',
         validated: false,
+        method: 'none',
       };
     }
 
