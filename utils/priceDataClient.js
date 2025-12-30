@@ -79,16 +79,20 @@ async function getHistoricalPriceDataFromDeribitTrades(instrument_name, startTim
     const intervalSeconds = intervalMs / 1000;
 
     for (const trade of trades) {
-      // Deribit trade format: {trade_id, instrument_name, price, amount, direction, timestamp}
+      // Deribit trade format from historical API: 
+      // {trade_id, instrument_name, price, amount, direction, timestamp, trade_seq, tick_direction, ...}
       const tradeTime = trade.timestamp || trade.time;
-      const tradePrice = trade.price;
-      const tradeAmount = Math.abs(trade.amount || trade.size || 0);
+      const tradePrice = parseFloat(trade.price);
+      const tradeAmount = Math.abs(parseFloat(trade.amount || trade.size || 0));
       
-      if (!tradeTime || !tradePrice) {
+      if (!tradeTime || !tradePrice || isNaN(tradePrice)) {
+        console.warn(`[priceDataClient] Skipping invalid trade:`, trade);
         continue; // Skip invalid trades
       }
 
-      const candleKey = Math.floor(tradeTime / intervalSeconds) * intervalSeconds;
+      // Convert timestamp to seconds if it's in milliseconds
+      const tradeTimeSeconds = tradeTime > 1000000000000 ? Math.floor(tradeTime / 1000) : tradeTime;
+      const candleKey = Math.floor(tradeTimeSeconds / intervalSeconds) * intervalSeconds;
       
       if (!candles[candleKey]) {
         candles[candleKey] = {
