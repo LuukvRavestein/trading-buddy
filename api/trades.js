@@ -74,11 +74,23 @@ export default async function handler(req, res) {
     const { mode, signal, limit } = req.query;
 
     // Get trades with filters
-    const trades = await getTrades({
-      mode: mode || undefined,
-      signal: signal || undefined,
-      limit: limit ? parseInt(limit) : undefined,
-    });
+    let trades;
+    try {
+      trades = await getTrades({
+        mode: mode || undefined,
+        signal: signal || undefined,
+        limit: limit ? parseInt(limit) : undefined,
+      });
+    } catch (tradesError) {
+      console.error('[trades] Error getting trades:', tradesError);
+      // Return empty array instead of failing completely
+      trades = [];
+    }
+    
+    if (!Array.isArray(trades)) {
+      console.error('[trades] getTrades returned non-array:', typeof trades);
+      trades = [];
+    }
 
     // Calculate P&L for each trade
     const tradesWithPnL = trades.map(trade => ({

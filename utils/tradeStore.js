@@ -91,8 +91,16 @@ export async function getTrades(options = {}) {
   if (isSupabaseConfigured()) {
     try {
       const dbTrades = await getTradesFromSupabase(options);
+      
+      if (!Array.isArray(dbTrades)) {
+        console.warn('[tradeStore] getTradesFromSupabase returned non-array:', typeof dbTrades);
+        throw new Error('Invalid response from Supabase');
+      }
+      
       // Map database fields back to trade format
-      return dbTrades.map(t => ({
+      return dbTrades.map(t => {
+        try {
+          return {
         id: t.id,
         timestamp: t.timestamp || t.created_at,
         success: t.success,
@@ -105,20 +113,52 @@ export async function getTrades(options = {}) {
         entryPrice: parseFloat(t.entry_price) || t.entry_price,
         stopLoss: parseFloat(t.stop_loss) || t.stop_loss,
         takeProfit: parseFloat(t.take_profit) || t.take_profit,
-        exitType: t.exit_type || null, // May not exist yet in database
-        exitPrice: t.exit_price ? parseFloat(t.exit_price) : (t.exit_price || null),
-        exitTime: t.exit_time || null,
-        validated: t.validated || false,
-        validatedBy: t.validated_by || null,
-        side: t.side,
-        amount: t.amount,
-        positionSizeUsd: parseFloat(t.position_size_usd) || t.position_size_usd,
-        riskCheck: t.risk_check,
-        aiCheck: t.ai_check, // Include AI check data
-        orderId: t.order_id,
-        processingTimeMs: t.processing_time_ms,
-        requestId: t.request_id,
-      }));
+            exitType: t.exit_type || null, // May not exist yet in database
+            exitPrice: t.exit_price ? parseFloat(t.exit_price) : (t.exit_price || null),
+            exitTime: t.exit_time || null,
+            validated: t.validated !== undefined ? t.validated : false,
+            validatedBy: t.validated_by || null,
+            side: t.side,
+            amount: t.amount,
+            positionSizeUsd: parseFloat(t.position_size_usd) || t.position_size_usd || 0,
+            riskCheck: t.risk_check,
+            aiCheck: t.ai_check, // Include AI check data
+            orderId: t.order_id,
+            processingTimeMs: t.processing_time_ms,
+            requestId: t.request_id,
+          };
+        } catch (mapError) {
+          console.error('[tradeStore] Error mapping trade:', mapError, 'Trade data:', t);
+          // Return a minimal trade object to prevent complete failure
+          return {
+            id: t.id || `error-${Date.now()}`,
+            timestamp: t.timestamp || t.created_at || new Date().toISOString(),
+            success: false,
+            action: 'error',
+            reason: `Error mapping trade: ${mapError.message}`,
+            mode: t.mode || 'unknown',
+            signal: t.signal || 'UNKNOWN',
+            symbol: t.symbol || 'UNKNOWN',
+            instrument: t.instrument || t.symbol || 'UNKNOWN',
+            entryPrice: t.entry_price ? parseFloat(t.entry_price) : 0,
+            stopLoss: t.stop_loss ? parseFloat(t.stop_loss) : 0,
+            takeProfit: t.take_profit ? parseFloat(t.take_profit) : 0,
+            exitType: null,
+            exitPrice: null,
+            exitTime: null,
+            validated: false,
+            validatedBy: null,
+            side: t.side || null,
+            amount: t.amount || 0,
+            positionSizeUsd: 0,
+            riskCheck: null,
+            aiCheck: null,
+            orderId: null,
+            processingTimeMs: null,
+            requestId: null,
+          };
+        }
+      });
     } catch (error) {
       console.error('[tradeStore] Failed to get from Supabase, using in-memory fallback:', error);
       // Fall through to in-memory storage
