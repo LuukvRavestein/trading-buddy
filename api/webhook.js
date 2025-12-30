@@ -165,9 +165,6 @@ export default async function handler(req, res) {
       }
 
       // Find the matching trade by entry price and signal (within 0.1% tolerance)
-      const { getTrades } = await import('../utils/tradeStore.js');
-      const { updateTradeExit } = await import('../utils/tradeStore.js');
-      
       const allTrades = await getTrades({ limit: 100 });
       const matchingTrade = allTrades.find(t => {
         const priceMatch = Math.abs(t.entryPrice - entryPrice) / entryPrice < 0.001; // 0.1% tolerance
