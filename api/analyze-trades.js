@@ -11,7 +11,6 @@
 
 import { getTrades } from '../utils/tradeStore.js';
 import { getCurrentPrice } from '../utils/deribitClient.js';
-import { getHistoricalPriceData } from '../utils/priceDataClient.js';
 
 /**
  * Analyze a single trade
@@ -180,15 +179,11 @@ function analyzeTrade(trade, currentMarketPrice = null) {
 }
 
 /**
- * Validate trade outcome using historical price data from Deribit
- * Checks if TP or SL was hit after entry time
- * 
- * @param {object} trade - Trade object
- * @param {string} instrument - Instrument name
- * @param {boolean} useTestnet - Use testnet
- * @returns {Promise<object>} Validation result with actual outcome
+ * DEPRECATED: Historical data validation removed.
+ * We now use TradingView exit alerts for validation.
+ * This function is kept for reference but not used.
  */
-async function validateTradeWithHistoricalData(trade, instrument) {
+async function validateTradeWithHistoricalData_DEPRECATED(trade, instrument) {
   if (!trade.entryPrice || !trade.timestamp) {
     return { 
       outcome: 'unknown', 
@@ -475,37 +470,34 @@ export default async function handler(req, res) {
       trades.map(async (trade) => {
         const analysis = analyzeTrade(trade, currentMarketPrice);
         
-        // Validate with historical data (uses Binance/CoinGecko as fallback since Deribit historical data is unavailable)
-        try {
-          const validation = await validateTradeWithHistoricalData(trade, instrument);
-          analysis.historicalValidation = validation;
+        // Use TradingView exit alerts for validation (not historical data)
+        if (trade.exitPrice && trade.validated) {
+          // Trade has been validated by TradingView exit alert
+          analysis.historicalValidation = {
+            outcome: trade.exitType === 'TAKE_PROFIT' ? 'win' : 'loss',
+            reason: `Validated by TradingView: ${trade.exitType} at ${trade.exitPrice}`,
+            exitPrice: trade.exitPrice,
+            exitTime: trade.exitTime,
+            validated: true,
+            validatedBy: trade.validatedBy,
+          };
           
-          // Update wouldHaveSucceeded based on actual outcome
-          if (validation.validated) {
-            if (validation.outcome === 'win') {
-              analysis.wouldHaveSucceeded = true;
-              analysis.confidence = 'high';
-              analysis.reason = `✅ Validated: ${validation.reason}`;
-            } else if (validation.outcome === 'loss') {
-              analysis.wouldHaveSucceeded = false;
-              analysis.confidence = 'high';
-              analysis.reason = `❌ Validated: ${validation.reason}`;
-            } else if (validation.outcome === 'open_profit' || validation.outcome === 'open_loss') {
-              // Trade is still open, but we can see it's moving in the right direction
-              analysis.wouldHaveSucceeded = validation.outcome === 'open_profit' ? true : null;
-              analysis.reason = `⏳ ${validation.reason}`;
-            }
+          if (trade.exitType === 'TAKE_PROFIT') {
+            analysis.wouldHaveSucceeded = true;
+            analysis.confidence = 'high';
+            analysis.reason = `✅ Validated by TradingView: ${trade.exitType}`;
+          } else if (trade.exitType === 'STOP_LOSS') {
+            analysis.wouldHaveSucceeded = false;
+            analysis.confidence = 'high';
+            analysis.reason = `❌ Validated by TradingView: ${trade.exitType}`;
           }
-        } catch (error) {
-          // Historical validation is optional - don't fail the entire analysis if it's unavailable
-          console.warn(`[analyze-trades] Could not validate trade ${trade.id} with historical data:`, error.message);
+        } else {
+          // Trade not yet validated - waiting for TradingView exit alert
           analysis.historicalValidation = {
             outcome: 'unknown',
-            reason: `Historical validation unavailable: ${error.message}`,
+            reason: 'Waiting for TradingView exit alert. Make sure the chart is open and alerts are active.',
             validated: false,
-            error: error.message,
           };
-          // Keep the original analysis if historical validation fails
         }
         
         return analysis;

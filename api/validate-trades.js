@@ -1,19 +1,18 @@
 /**
  * Validate existing trades endpoint
  * 
- * Validates existing trades that don't have exit data by checking historical price data
- * to see if TP or SL was hit.
+ * NOTE: This endpoint only shows which trades are waiting for TradingView exit alerts.
+ * We use TradingView exit alerts for validation, not historical data.
  * 
  * Usage: GET /api/validate-trades?limit=10
  */
 
-import { getTrades, updateTradeExit } from '../utils/tradeStore.js';
-import { getHistoricalPriceData } from '../utils/priceDataClient.js';
+import { getTrades } from '../utils/tradeStore.js';
 
 /**
- * Validate a single trade by checking historical data
+ * Check trade status (no validation - only shows which trades are waiting for TradingView alerts)
  */
-async function validateTrade(trade) {
+function checkTradeStatus(trade) {
   if (!trade.entryPrice || !trade.timestamp) {
     return {
       success: false,
@@ -21,162 +20,26 @@ async function validateTrade(trade) {
     };
   }
 
-  // Skip if already validated
+  // Already validated by TradingView
   if (trade.exitPrice && trade.validated) {
     return {
       success: true,
-      reason: 'Trade already validated',
-      exitPrice: trade.exitPrice,
       exitType: trade.exitType,
+      exitPrice: trade.exitPrice,
+      exitTime: trade.exitTime,
+      validatedBy: trade.validatedBy,
+      reason: 'Trade validated by TradingView exit alert',
     };
   }
 
-  const entryTimestamp = new Date(trade.timestamp).getTime();
-  const now = Date.now();
-  
-  // Only validate trades that are at least 5 minutes old
-  if (now - entryTimestamp < 5 * 60 * 1000) {
-    return {
-      success: false,
-      reason: 'Trade too recent, needs 5+ minutes',
-    };
-  }
-
-  // Get historical data from entry time to now (max 24 hours)
-  const endTimestamp = Math.min(entryTimestamp + (24 * 60 * 60 * 1000), now);
-  const startTimestamp = Math.max(entryTimestamp - (5 * 60 * 1000), entryTimestamp - (24 * 60 * 60 * 1000));
-
-  try {
-    // Try different instrument names (Deribit uses different formats)
-    let instrument = trade.instrument || trade.symbol || 'BTC-PERPETUAL';
-    
-    // Normalize instrument name for Deribit Historical API
-    // Deribit uses 'BTC-PERPETUAL' for perpetuals, but historical API might need different format
-    if (instrument.includes('BTCUSD') || instrument.includes('BTCUSD.P')) {
-      instrument = 'BTC-PERPETUAL'; // Deribit historical API uses this format
-    }
-    
-    let candles = [];
-    try {
-      candles = await getHistoricalPriceData(instrument, startTimestamp, endTimestamp, '1m');
-    } catch (error) {
-      console.warn(`[validate-trades] Failed to fetch historical data for ${instrument}:`, error.message);
-      // Fall through to use current price as fallback
-    }
-
-    if (!candles || candles.length === 0) {
-      // Fallback: Use simple validation based on current price vs TP/SL
-      // This is less accurate but better than nothing
-      console.log(`[validate-trades] No historical data, using simple validation for trade ${trade.id}`);
-      
-      // For now, mark as "still open" since we can't determine if TP/SL was hit
-      return {
-        success: true,
-        exitType: null,
-        exitPrice: null,
-        reason: 'No historical data available - cannot determine if TP/SL was hit. Trade may still be open.',
-        fallback: true,
-      };
-    }
-
-    const entryPrice = trade.entryPrice;
-    const stopLoss = trade.stopLoss;
-    const takeProfit = trade.takeProfit;
-
-    // Check each candle to see if TP or SL was hit
-    for (const candle of candles) {
-      if (candle.t < entryTimestamp) {
-        continue;
-      }
-
-      if (trade.signal === 'LONG') {
-        // LONG: Check if high hit TP or low hit SL
-        if (takeProfit && candle.h >= takeProfit) {
-          // Update trade with TP exit
-          await updateTradeExit(trade.id, {
-            exitType: 'TAKE_PROFIT',
-            exitPrice: takeProfit,
-            exitTime: new Date(candle.t).toISOString(),
-            validated: true,
-            validatedBy: 'historical_validation',
-          });
-          return {
-            success: true,
-            exitType: 'TAKE_PROFIT',
-            exitPrice: takeProfit,
-            exitTime: new Date(candle.t).toISOString(),
-            reason: 'Take profit hit in historical data',
-          };
-        }
-        if (stopLoss && candle.l <= stopLoss) {
-          // Update trade with SL exit
-          await updateTradeExit(trade.id, {
-            exitType: 'STOP_LOSS',
-            exitPrice: stopLoss,
-            exitTime: new Date(candle.t).toISOString(),
-            validated: true,
-            validatedBy: 'historical_validation',
-          });
-          return {
-            success: true,
-            exitType: 'STOP_LOSS',
-            exitPrice: stopLoss,
-            exitTime: new Date(candle.t).toISOString(),
-            reason: 'Stop loss hit in historical data',
-          };
-        }
-      } else if (trade.signal === 'SHORT') {
-        // SHORT: Check if low hit TP or high hit SL
-        if (takeProfit && candle.l <= takeProfit) {
-          await updateTradeExit(trade.id, {
-            exitType: 'TAKE_PROFIT',
-            exitPrice: takeProfit,
-            exitTime: new Date(candle.t).toISOString(),
-            validated: true,
-            validatedBy: 'historical_validation',
-          });
-          return {
-            success: true,
-            exitType: 'TAKE_PROFIT',
-            exitPrice: takeProfit,
-            exitTime: new Date(candle.t).toISOString(),
-            reason: 'Take profit hit in historical data',
-          };
-        }
-        if (stopLoss && candle.h >= stopLoss) {
-          await updateTradeExit(trade.id, {
-            exitType: 'STOP_LOSS',
-            exitPrice: stopLoss,
-            exitTime: new Date(candle.t).toISOString(),
-            validated: true,
-            validatedBy: 'historical_validation',
-          });
-          return {
-            success: true,
-            exitType: 'STOP_LOSS',
-            exitPrice: stopLoss,
-            exitTime: new Date(candle.t).toISOString(),
-            reason: 'Stop loss hit in historical data',
-          };
-        }
-      }
-    }
-
-    // Neither TP nor SL was hit - trade is still open
-    return {
-      success: true,
-      exitType: null,
-      exitPrice: null,
-      reason: 'Trade still open, neither TP nor SL hit',
-      currentPrice: candles[candles.length - 1]?.c,
-    };
-  } catch (error) {
-    console.error(`[validate-trades] Error validating trade ${trade.id}:`, error);
-    return {
-      success: false,
-      reason: `Error: ${error.message}`,
-    };
-  }
+  // Waiting for TradingView exit alert
+  return {
+    success: true,
+    exitType: null,
+    exitPrice: null,
+    reason: 'Waiting for TradingView exit alert. Make sure the chart is open and alerts are active.',
+    waitingForAlert: true,
+  };
 }
 
 export default async function handler(req, res) {
@@ -204,34 +67,36 @@ export default async function handler(req, res) {
     if (tradesToValidate.length === 0) {
       return res.status(200).json({
         status: 'ok',
-        message: 'No trades to validate',
+        message: 'No trades waiting for validation',
         validated: 0,
         results: [],
       });
     }
 
-    // Validate each trade
-    const results = await Promise.all(
-      tradesToValidate.map(async (trade) => {
-        const validation = await validateTrade(trade);
-        return {
-          tradeId: trade.id,
-          timestamp: trade.timestamp,
-          signal: trade.signal,
-          entryPrice: trade.entryPrice,
-          ...validation,
-        };
-      })
-    );
+    // Check status of each trade (no validation - just show status)
+    const results = tradesToValidate.map((trade) => {
+      const status = checkTradeStatus(trade);
+      return {
+        tradeId: trade.id,
+        timestamp: trade.timestamp,
+        signal: trade.signal,
+        entryPrice: trade.entryPrice,
+        stopLoss: trade.stopLoss,
+        takeProfit: trade.takeProfit,
+        ...status,
+      };
+    });
 
-    const validated = results.filter(r => r.success && r.exitType).length;
+    const validated = results.filter(r => r.exitType && r.validatedBy).length;
 
     return res.status(200).json({
       status: 'ok',
-      message: `Validated ${validated} out of ${tradesToValidate.length} trades`,
+      message: `Found ${validated} validated trades out of ${tradesToValidate.length} total. ${tradesToValidate.length - validated} waiting for TradingView exit alerts.`,
       validated,
+      waitingForAlerts: tradesToValidate.length - validated,
       total: tradesToValidate.length,
       results,
+      note: 'Trades are validated automatically via TradingView exit alerts. Make sure the chart is open and alerts are active.',
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -242,4 +107,3 @@ export default async function handler(req, res) {
     });
   }
 }
-
