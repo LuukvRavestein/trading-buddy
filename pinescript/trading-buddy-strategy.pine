@@ -265,11 +265,16 @@ if not na(lastEntryPrice) and not na(lastSLPrice) and not na(lastTPPrice) and no
     
     // Calculate how many bars since entry
     barsSinceEntry = bar_index - lastEntryBar
-    lookbackBars = math.min(barsSinceEntry + 1, 200) // Check up to 200 bars back
     
-    if lastSignalType == "LONG"
-        // LONG: Check if highest high since entry >= TP, or lowest low <= SL
-        if lookbackBars > 0
+    // Limit lookback to avoid historical buffer errors (max 500 bars, but be safe with 100)
+    // Also ensure we don't request more than available
+    lookbackBars = math.min(barsSinceEntry + 1, 100)
+    
+    // Only check if we have enough bars and lookback is reasonable
+    if lookbackBars > 0 and lookbackBars <= 100
+        if lastSignalType == "LONG"
+            // LONG: Check if highest high since entry >= TP, or lowest low <= SL
+            // Use ta.highest/lowest with safe lookback
             highestSinceEntry = ta.highest(high, lookbackBars)
             lowestSinceEntry = ta.lowest(low, lookbackBars)
             
@@ -283,9 +288,8 @@ if not na(lastEntryPrice) and not na(lastSLPrice) and not na(lastTPPrice) and no
                 slHit := true
                 exitPrice := lastSLPrice
                 exitReason := "STOP_LOSS"
-    else if lastSignalType == "SHORT"
-        // SHORT: Check if lowest low since entry <= TP, or highest high >= SL
-        if lookbackBars > 0
+        else if lastSignalType == "SHORT"
+            // SHORT: Check if lowest low since entry <= TP, or highest high >= SL
             highestSinceEntry = ta.highest(high, lookbackBars)
             lowestSinceEntry = ta.lowest(low, lookbackBars)
             
