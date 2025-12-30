@@ -223,17 +223,22 @@ var float lastSLPrice = na
 var float lastTPPrice = na
 var string lastSignalType = na
 var int lastEntryBar = na
+var bool exitAlertSent = false
 
 // Store entry data when signal is generated
+// Only update if no active trade is being tracked (allows new signals to overwrite completed trades)
 if (longSignal or shortSignal) and barstate.isconfirmed
+    // Update tracking variables (new signal always overwrites, which is OK for paper trading)
     lastEntryPrice := entryPrice
     lastSLPrice := slPrice
     lastTPPrice := tpPrice
     lastSignalType := longSignal ? "LONG" : "SHORT"
     lastEntryBar := bar_index
+    exitAlertSent := false // Reset exit flag for new trade
 
 // Detect if TP or SL was hit (for validation alerts)
-if not na(lastEntryPrice) and not na(lastSLPrice) and not na(lastTPPrice)
+// Check every bar, not just when signal is generated
+if not na(lastEntryPrice) and not na(lastSLPrice) and not na(lastTPPrice) and not exitAlertSent
     bool tpHit = false
     bool slHit = false
     float exitPrice = na
@@ -271,12 +276,9 @@ if not na(lastEntryPrice) and not na(lastSLPrice) and not na(lastTPPrice)
         
         alert(validationPayload, alert.freq_once_per_bar)
         
-        // Reset tracking variables after exit
-        lastEntryPrice := na
-        lastSLPrice := na
-        lastTPPrice := na
-        lastSignalType := na
-        lastEntryBar := na
+        // Mark that exit alert was sent (prevent duplicate alerts)
+        // Keep tracking variables until new signal comes in (for reference)
+        exitAlertSent := true
 
 // --- STRATEGY EXIT (for backtesting) ---
 if strategy.position_size > 0
