@@ -32,19 +32,21 @@ function calculatePnL(trade) {
     return 0;
   }
 
-  // For successful trades: assume closed at TP (profit)
-  // In paper mode, we assume the trade would have hit TP
+  // Use validated exit price if available (from TradingView alerts)
   let exitPrice = null;
   
-  if (trade.takeProfit) {
-    // Successful trade: closed at TP
+  if (trade.exitPrice && trade.validated) {
+    // Use validated exit price from TradingView
+    exitPrice = parseFloat(trade.exitPrice);
+  } else if (trade.takeProfit) {
+    // Fallback: assume closed at TP (profit) for paper trades
     exitPrice = parseFloat(trade.takeProfit);
   } else if (trade.stopLoss) {
     // If no TP, assume it hit SL (loss)
     exitPrice = parseFloat(trade.stopLoss);
   }
 
-  if (!exitPrice || exitPrice <= 0) {
+  if (!exitPrice || exitPrice <= 0 || isNaN(exitPrice)) {
     return 0; // No exit price available
   }
 
