@@ -2,14 +2,18 @@
  * Close open trade endpoint
  * 
  * Automatically finds and closes the oldest open trade
- * Useful when exit alerts haven't been received yet
+ * Uses TP/SL prices from the trade (no market price lookup)
+ * 
+ * NOTE: This is a fallback for when TradingView exit alerts are not working.
+ * Normally, exits should be handled automatically via TradingView alerts.
  * 
  * Usage: POST /api/close-open-trade
  * Body (optional): { "exitType": "TAKE_PROFIT" or "STOP_LOSS", "exitPrice": 50000 }
+ * 
+ * If exitType/exitPrice not provided, defaults to TAKE_PROFIT with trade's TP price.
  */
 
 import { getTrades, updateTradeExit } from '../utils/tradeStore.js';
-import { getCurrentPrice } from '../utils/deribitClient.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -43,67 +47,19 @@ export default async function handler(req, res) {
     const tradeToClose = openTrades[openTrades.length - 1];
     
     // Determine exit type and price automatically if not provided
+    // Uses TP/SL prices from the trade (no market price lookup - relies on TradingView alerts)
     let finalExitType = exitType;
     let finalExitPrice = exitPrice;
     
     if (!finalExitType || !finalExitPrice) {
-      // Try to get current market price to determine if TP or SL was hit
-      let currentPrice = null;
-      try {
-        const instrument = tradeToClose.instrument || tradeToClose.symbol || 'BTC-PERPETUAL';
-        const useTestnet = process.env.DERIBIT_USE_TESTNET === 'true';
-        currentPrice = await getCurrentPrice(instrument, useTestnet);
-      } catch (error) {
-        console.warn('[close-open-trade] Could not get current price:', error.message);
-      }
-      
-      // Determine exit type based on current price vs entry price
-      if (currentPrice && tradeToClose.entryPrice) {
-        if (tradeToClose.signal === 'LONG') {
-          // LONG: TP if current price >= TP, SL if current price <= SL
-          if (tradeToClose.takeProfit && currentPrice >= tradeToClose.takeProfit) {
-            finalExitType = 'TAKE_PROFIT';
-            finalExitPrice = tradeToClose.takeProfit;
-          } else if (tradeToClose.stopLoss && currentPrice <= tradeToClose.stopLoss) {
-            finalExitType = 'STOP_LOSS';
-            finalExitPrice = tradeToClose.stopLoss;
-          } else if (currentPrice > tradeToClose.entryPrice) {
-            // Price is above entry but below TP - assume it would have hit TP eventually
-            finalExitType = 'TAKE_PROFIT';
-            finalExitPrice = tradeToClose.takeProfit || currentPrice;
-          } else {
-            // Price is below entry but above SL - assume it would have hit SL eventually
-            finalExitType = 'STOP_LOSS';
-            finalExitPrice = tradeToClose.stopLoss || currentPrice;
-          }
-        } else if (tradeToClose.signal === 'SHORT') {
-          // SHORT: TP if current price <= TP, SL if current price >= SL
-          if (tradeToClose.takeProfit && currentPrice <= tradeToClose.takeProfit) {
-            finalExitType = 'TAKE_PROFIT';
-            finalExitPrice = tradeToClose.takeProfit;
-          } else if (tradeToClose.stopLoss && currentPrice >= tradeToClose.stopLoss) {
-            finalExitType = 'STOP_LOSS';
-            finalExitPrice = tradeToClose.stopLoss;
-          } else if (currentPrice < tradeToClose.entryPrice) {
-            // Price is below entry but above TP - assume it would have hit TP eventually
-            finalExitType = 'TAKE_PROFIT';
-            finalExitPrice = tradeToClose.takeProfit || currentPrice;
-          } else {
-            // Price is above entry but below SL - assume it would have hit SL eventually
-            finalExitType = 'STOP_LOSS';
-            finalExitPrice = tradeToClose.stopLoss || currentPrice;
-          }
-        }
-      }
-      
-      // Fallback: if we still don't have exit type/price, use defaults
+      // Default: assume TAKE_PROFIT (optimistic approach)
+      // In practice, TradingView alerts should determine this automatically
       if (!finalExitType) {
-        // Default: assume TP (optimistic)
         finalExitType = 'TAKE_PROFIT';
       }
       
       if (!finalExitPrice) {
-        // Use take profit or stop loss from trade
+        // Use take profit or stop loss from trade based on exit type
         if (finalExitType === 'TAKE_PROFIT' && tradeToClose.takeProfit) {
           finalExitPrice = tradeToClose.takeProfit;
         } else if (finalExitType === 'STOP_LOSS' && tradeToClose.stopLoss) {
@@ -111,7 +67,7 @@ export default async function handler(req, res) {
         } else {
           return res.status(400).json({
             status: 'error',
-            reason: 'Cannot determine exit price. Please provide exitType and exitPrice in request body.',
+            reason: 'Cannot determine exit price from trade data. Please provide exitType and exitPrice in request body, or wait for TradingView exit alert.',
             openTrade: {
               id: tradeToClose.id,
               signal: tradeToClose.signal,
@@ -120,6 +76,7 @@ export default async function handler(req, res) {
               takeProfit: tradeToClose.takeProfit,
               timestamp: tradeToClose.timestamp,
             },
+            note: 'For accurate exit detection, use TradingView exit alerts. This endpoint is only for manual closing when alerts are not working.',
           });
         }
       }
