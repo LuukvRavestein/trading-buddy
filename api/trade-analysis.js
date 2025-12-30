@@ -471,21 +471,18 @@ const analysisHTML = `<!DOCTYPE html>
 
     // Open TradingView chart with trade markers
     function openTradingViewChart(instrument, entryPrice, stopLoss, takeProfit, signal, timestamp) {
-      // Convert instrument name to TradingView format
-      // BTC-PERPETUAL -> DERIBIT:BTCUSDC (or similar)
-      let tvSymbol = 'DERIBIT:' + instrument.replace('-PERPETUAL', 'USDC');
+      // Use Deribit BTC Perpetual Futures Contract symbol: BTOUSD.P
+      // TradingView format: DERIBIT:BTOUSD.P
+      const tvSymbol = 'DERIBIT:BTOUSD.P';
       
-      // Create TradingView chart URL with markers
-      const entryTime = new Date(timestamp).getTime() / 1000; // TradingView uses Unix timestamp in seconds
+      // Create TradingView chart URL
+      // Open in new window with the chart
+      const chartUrl = \`https://www.tradingview.com/chart/?symbol=\${encodeURIComponent(tvSymbol)}&interval=5\`;
+      window.open(chartUrl, '_blank');
       
-      // TradingView widget URL
-      const widgetUrl = \`https://www.tradingview.com/widgetembed/?frameElementId=tradingview_\${Date.now()}&symbol=\${encodeURIComponent(tvSymbol)}&interval=5&theme=dark&style=1&locale=en&toolbar_bg=#1a1f3a&enable_publishing=false&hide_top_toolbar=false&hide_legend=false&save_image=false&studies=%5B%5D&support_host=https%3A%2F%2Fwww.tradingview.com\`;
-      
-      // Open in new window
-      window.open(\`https://www.tradingview.com/chart/?symbol=\${encodeURIComponent(tvSymbol)}&interval=5\`, '_blank');
-      
-      // Also show info
-      alert(\`TradingView Chart\\n\\nSymbol: \${tvSymbol}\\nEntry: $\${entryPrice.toLocaleString()}\\nStop Loss: $\${stopLoss.toLocaleString()}\\nTake Profit: $\${takeProfit.toLocaleString()}\\nSignal: \${signal}\\n\\nNote: Manually add markers on TradingView to see if TP/SL was hit.\`);
+      // Show trade details
+      const entryTime = new Date(timestamp).toLocaleString('nl-NL');
+      console.log(\`Trade Details:\\nSymbol: \${tvSymbol}\\nEntry: $\${entryPrice.toLocaleString()}\\nStop Loss: $\${stopLoss.toLocaleString()}\\nTake Profit: $\${takeProfit.toLocaleString()}\\nSignal: \${signal}\\nEntry Time: \${entryTime}\`);
     }
 
     // Load on page load
