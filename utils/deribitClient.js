@@ -292,54 +292,83 @@ export async function getHistoricalPriceData(instrument_name, startTimestamp, en
     const startSeconds = Math.floor(startTimestamp / 1000);
     const endSeconds = Math.floor(endTimestamp / 1000);
 
-    // This is a public endpoint, so we don't need authentication
-    const url = `${baseUrl}/public/get_tradingview_chart_data`;
+    // Try different possible endpoint names
+    // Note: Deribit's API might have changed or the endpoint name might be different
+    const possibleEndpoints = [
+      '/public/get_tradingview_chart_data',
+      '/public/get_chart_data',
+      '/public/tradingview_chart_data',
+    ];
+
+    let lastError = null;
     
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        instrument_name,
-        start_timestamp: startSeconds,
-        end_timestamp: endSeconds,
-        resolution,
-      }),
-    });
+    for (const endpoint of possibleEndpoints) {
+      try {
+        const url = `${baseUrl}${endpoint}`;
+        
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            instrument_name,
+            start_timestamp: startSeconds,
+            end_timestamp: endSeconds,
+            resolution,
+          }),
+        });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Deribit API error: ${response.status} ${errorText}`);
+        if (!response.ok) {
+          const errorText = await response.text();
+          lastError = new Error(`Deribit API error: ${response.status} ${errorText}`);
+          continue; // Try next endpoint
+        }
+
+        const data = await response.json();
+
+        if (data.error) {
+          // If it's "Method not found", try next endpoint
+          if (data.error.code === -32601 || data.error.message?.includes('not found')) {
+            lastError = new Error(`Deribit API error: ${data.error.message || data.error.code || 'Unknown error'}`);
+            continue;
+          }
+          throw new Error(`Deribit API error: ${data.error.message || data.error.code || 'Unknown error'}`);
+        }
+
+        const result = data.result || data;
+
+        // Deribit returns data in format: {ticks: [timestamps], status: "ok", volume: [volumes], open: [opens], close: [closes], high: [highs], low: [lows]}
+        if (!result || !result.ticks || result.ticks.length === 0) {
+          return [];
+        }
+
+        // Convert to array of candlestick objects
+        const candles = [];
+        for (let i = 0; i < result.ticks.length; i++) {
+          candles.push({
+            t: result.ticks[i] * 1000, // Convert to milliseconds
+            o: result.open[i],
+            h: result.high[i],
+            l: result.low[i],
+            c: result.close[i],
+            v: result.volume[i] || 0,
+          });
+        }
+
+        return candles;
+      } catch (error) {
+        lastError = error;
+        continue; // Try next endpoint
+      }
     }
 
-    const data = await response.json();
-
-    if (data.error) {
-      throw new Error(`Deribit API error: ${data.error.message || data.error.code || 'Unknown error'}`);
+    // If all endpoints failed, throw the last error
+    if (lastError) {
+      throw new Error(`All Deribit historical data endpoints failed. Last error: ${lastError.message}. Note: Historical validation may not be available.`);
     }
 
-    const result = data.result || data;
-
-    // Deribit returns data in format: {ticks: [timestamps], status: "ok", volume: [volumes], open: [opens], close: [closes], high: [highs], low: [lows]}
-    if (!result || !result.ticks || result.ticks.length === 0) {
-      return [];
-    }
-
-    // Convert to array of candlestick objects
-    const candles = [];
-    for (let i = 0; i < result.ticks.length; i++) {
-      candles.push({
-        t: result.ticks[i] * 1000, // Convert to milliseconds
-        o: result.open[i],
-        h: result.high[i],
-        l: result.low[i],
-        c: result.close[i],
-        v: result.volume[i] || 0,
-      });
-    }
-
-    return candles;
+    return [];
   } catch (error) {
     console.error('[deribitClient] getHistoricalPriceData error:', error);
     throw error;
