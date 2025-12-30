@@ -399,7 +399,7 @@ export default async function handler(req, res) {
       trades.map(async (trade) => {
         const analysis = analyzeTrade(trade, currentMarketPrice);
         
-        // Validate with historical data from Deribit
+        // Validate with historical data from Deribit (optional, won't fail if unavailable)
         try {
           const validation = await validateTradeWithHistoricalData(trade, instrument, useTestnet);
           analysis.historicalValidation = validation;
@@ -421,12 +421,15 @@ export default async function handler(req, res) {
             }
           }
         } catch (error) {
-          console.warn(`[analyze-trades] Could not validate trade ${trade.id}:`, error.message);
+          // Historical validation is optional - don't fail the entire analysis if it's unavailable
+          console.warn(`[analyze-trades] Could not validate trade ${trade.id} with historical data:`, error.message);
           analysis.historicalValidation = {
             outcome: 'unknown',
-            reason: `Validation failed: ${error.message}`,
+            reason: `Historical validation unavailable: ${error.message}`,
             validated: false,
+            error: error.message,
           };
+          // Keep the original analysis if historical validation fails
         }
         
         return analysis;

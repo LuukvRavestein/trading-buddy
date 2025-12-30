@@ -275,7 +275,7 @@ export async function getCurrentPrice(instrument_name, useTestnet = false) {
 
 /**
  * Get historical price data (candlesticks) from Deribit
- * This uses Deribit's TradingView chart data endpoint
+ * This uses Deribit's TradingView chart data endpoint (public, no auth required)
  * 
  * @param {string} instrument_name - Instrument (e.g., 'BTC-PERPETUAL')
  * @param {number} startTimestamp - Start timestamp in milliseconds
@@ -286,16 +286,40 @@ export async function getCurrentPrice(instrument_name, useTestnet = false) {
  */
 export async function getHistoricalPriceData(instrument_name, startTimestamp, endTimestamp, resolution = '60', useTestnet = false) {
   try {
-    // Deribit expects timestamps in milliseconds
+    const baseUrl = useTestnet ? DERIBIT_TESTNET_BASE : DERIBIT_API_BASE;
+    
+    // Deribit expects timestamps in seconds (not milliseconds)
     const startSeconds = Math.floor(startTimestamp / 1000);
     const endSeconds = Math.floor(endTimestamp / 1000);
 
-    const result = await apiRequest('/public/get_tradingview_chart_data', {
-      instrument_name,
-      start_timestamp: startSeconds,
-      end_timestamp: endSeconds,
-      resolution,
-    }, useTestnet);
+    // This is a public endpoint, so we don't need authentication
+    const url = `${baseUrl}/public/get_tradingview_chart_data`;
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        instrument_name,
+        start_timestamp: startSeconds,
+        end_timestamp: endSeconds,
+        resolution,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Deribit API error: ${response.status} ${errorText}`);
+    }
+
+    const data = await response.json();
+
+    if (data.error) {
+      throw new Error(`Deribit API error: ${data.error.message || data.error.code || 'Unknown error'}`);
+    }
+
+    const result = data.result || data;
 
     // Deribit returns data in format: {ticks: [timestamps], status: "ok", volume: [volumes], open: [opens], close: [closes], high: [highs], low: [lows]}
     if (!result || !result.ticks || result.ticks.length === 0) {
