@@ -8,7 +8,8 @@
     "start": "node worker.mjs",
     "dev": "node worker.mjs",
     "test": "echo \"No tests yet\"",
-    "lint:syntax": "node --check worker.mjs && node --check src/ingest/marketDataIngest.mjs && node --check src/exchanges/deribitClient.mjs"
+    "lint:syntax": "node --check worker.mjs && node --check src/ingest/marketDataIngest.mjs && node --check src/exchanges/deribitClient.mjs && node --check src/analysis/stateBuilder.mjs && node --check src/analysis/stateRunner.mjs",
+    "check:syntax": "npm run lint:syntax"
   },
   "keywords": [
     "trading",

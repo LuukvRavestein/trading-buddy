@@ -22,6 +22,7 @@ De bot bestaat uit 5 lagen:
 5. Kopieer de volledige SQL code en plak deze in de SQL Editor
 6. Klik **Run** (of Ctrl+Enter)
 7. Je zou moeten zien: "Success. No rows returned"
+8. **Voor State Builder**: Run ook `supabase/migrations/002_update_timeframe_state.sql` om de `timeframe_state` tabel te updaten
 
 ### 2. Supabase API Keys
 
@@ -93,17 +94,71 @@ LOG_LEVEL=info  # debug, info, warn, error
 2. Klik op je Background Worker
 3. Ga naar **Logs** tab
 4. Je zou elke minuut "Worker alive" moeten zien
+5. **State Builder logs**: Zoek naar "State updated for Xm" logs, bijvoorbeeld:
+   ```json
+   {
+     "timestamp": "2025-01-01T12:00:00.000Z",
+     "level": "info",
+     "message": "State updated for 15m",
+     "timeframe": 15,
+     "ts": "2025-01-01T12:00:00.000Z",
+     "trend": "up",
+     "atr": "1234.5678",
+     "swingHigh": "87650.5",
+     "swingLow": "87420.3",
+     "bos": "up",
+     "choch": null,
+     "candlesProcessed": 200
+   }
+   ```
 
 ### Supabase Tables
 
 1. Ga naar Supabase dashboard → **Table Editor**
 2. Check de volgende tabellen:
-   - `candles` - Market data
-   - `timeframe_state` - Computed state
-   - `trade_proposals` - Generated signals
-   - `paper_trades` - Simulated trades
+   - `candles` - Market data (zou moeten groeien elke minuut)
+   - `timeframe_state` - Computed state (trend, ATR, swings, BOS/CHoCH)
+   - `trade_proposals` - Generated signals (nog niet actief)
+   - `paper_trades` - Simulated trades (nog niet actief)
+
+#### Verifiëren dat timeframe_state wordt geüpdatet:
+
+1. Ga naar Supabase → **Table Editor** → `timeframe_state`
+2. Je zou rijen moeten zien voor elke timeframe (1, 5, 15, 60 minuten)
+3. Check de `ts` kolom - deze zou recent moeten zijn (binnen laatste minuut)
+4. Check de `trend` kolom - zou 'up', 'down', of 'chop' moeten zijn
+5. Check de `atr` kolom - zou een numerieke waarde moeten hebben (of null als onvoldoende data)
+6. Query voor laatste state per timeframe:
+   ```sql
+   SELECT symbol, timeframe_min, ts, trend, atr, last_swing_high, last_swing_low, bos_direction, choch_direction
+   FROM timeframe_state
+   WHERE symbol = 'BTC-PERPETUAL'
+   ORDER BY timeframe_min, ts DESC;
+   ```
 
 ## 🔧 Development
+
+### Syntax Check
+
+```bash
+npm run check:syntax
+```
+
+Dit controleert of alle `.mjs` bestanden syntactisch correct zijn.
+
+### State Builder Testen
+
+Test de state builder met een dev script:
+
+```bash
+# Test state builder voor 15m timeframe met laatste 200 candles
+node scripts/dev_state_check.mjs 15 200
+
+# Test andere timeframe
+node scripts/dev_state_check.mjs 60 500
+```
+
+Dit laadt candles uit Supabase en print de computed state.
 
 ### Lokaal testen (optioneel)
 
@@ -128,9 +183,9 @@ Het project is opgebouwd in fases:
 
 - ✅ **FASE 0**: Werkende Worker (heartbeat)
 - ✅ **FASE 1**: Supabase schema + client
-- ⏳ **FASE 2**: Deribit API client (candles)
-- ⏳ **FASE 3**: Ingest loop (candles → supabase)
-- ⏳ **FASE 4**: State builder (trend/ATR/swing/BOS/CHoCH)
+- ✅ **FASE 2**: Deribit API client (candles)
+- ✅ **FASE 3**: Ingest loop (candles → supabase)
+- ✅ **FASE 4**: State builder (trend/ATR/swing/BOS/CHoCH)
 - ⏳ **FASE 5**: Strategy engine (setup detectie)
 - ⏳ **FASE 6**: Paper trading + validatie
 - ⏳ **FASE 7**: Live execution

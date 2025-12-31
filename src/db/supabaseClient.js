@@ -358,6 +358,7 @@ export async function getLatestCandles({ symbol, timeframeMin, limit = 500 }) {
 
 /**
  * Upsert timeframe state
+ * Uses PostgREST UPSERT via ON CONFLICT
  * 
  * @param {object} state - State object
  * @returns {Promise<object>} Upserted state
@@ -368,10 +369,29 @@ export async function upsertTimeframeState(state) {
   }
 
   try {
-    const result = await supabaseRequest('POST', 'timeframe_state', state, {
-      select: '*',
+    const client = getSupabaseClient();
+    const url = `${client.url}/rest/v1/timeframe_state?on_conflict=symbol,timeframe_min,ts`;
+    
+    const headers = {
+      'apikey': client.key,
+      'Authorization': `Bearer ${client.key}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=representation,resolution=merge-duplicates',
+    };
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(state),
     });
-    return result[0] || state;
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Supabase API error: ${response.status} ${errorText.substring(0, 200)}`);
+    }
+
+    const data = await response.json();
+    return Array.isArray(data) ? data[0] : data;
   } catch (error) {
     console.error('[supabase] Failed to upsert timeframe state:', error);
     throw error;

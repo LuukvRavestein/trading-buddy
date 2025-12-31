@@ -22,6 +22,7 @@ console.log("Worker started OK (ESM)");
 import { getSupabaseClient } from './src/db/supabaseClient.js';
 import { ingestAllTimeframes, needsBackfill, initializeWebSocketFallback } from './src/ingest/marketDataIngest.mjs';
 import { getDataSource } from './src/ingest/candleBuilder.js';
+import { runStateUpdate } from './src/analysis/stateRunner.mjs';
 
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const POLL_INTERVAL_SECONDS = parseInt(process.env.POLL_INTERVAL_SECONDS || '60', 10);
@@ -138,7 +139,41 @@ async function runWorker() {
         // Continue - don't crash worker on ingest errors
       }
 
-      // TODO: FASE 4 - Add state builder here
+      // FASE 4: Timeframe State Builder
+      try {
+        const SYMBOL = process.env.SYMBOL || 'BTC-PERPETUAL';
+        const TIMEFRAMES = (process.env.TIMEFRAMES || '1,5,15,60').split(',').map(t => parseInt(t.trim(), 10));
+        
+        const stateResults = await runStateUpdate({ symbol: SYMBOL, timeframes: TIMEFRAMES });
+        
+        // Log successful state updates
+        for (const [tf, result] of Object.entries(stateResults)) {
+          if (result.success) {
+            log('info', `State updated for ${tf}m`, {
+              timeframe: tf,
+              ts: result.state.ts,
+              trend: result.state.trend,
+              atr: result.state.atr,
+              swingHigh: result.state.last_swing_high,
+              swingLow: result.state.last_swing_low,
+              bos: result.state.bos_direction,
+              choch: result.state.choch_direction,
+              candlesProcessed: result.candlesProcessed,
+            });
+          } else if (result.reason !== 'No new candles to process') {
+            log('warn', `State update failed for ${tf}m`, {
+              timeframe: tf,
+              reason: result.reason || result.error,
+            });
+          }
+        }
+      } catch (stateError) {
+        log('error', 'State builder failed', {
+          error: stateError.message,
+        });
+        // Continue - don't crash worker on state errors
+      }
+
       // TODO: FASE 5 - Add strategy engine here
       // TODO: FASE 6 - Add paper trading here
       // TODO: FASE 7 - Add live execution here
