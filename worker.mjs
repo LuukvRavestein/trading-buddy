@@ -23,6 +23,8 @@ import { getSupabaseClient } from './src/db/supabaseClient.js';
 import { ingestAllTimeframes, needsBackfill, initializeWebSocketFallback } from './src/ingest/marketDataIngest.mjs';
 import { getDataSource } from './src/ingest/candleBuilder.js';
 import { runStateUpdate } from './src/analysis/stateRunner.mjs';
+import { evaluateStrategy } from './src/strategy/strategyEvaluator.mjs';
+import { saveProposal } from './src/strategy/proposalWriter.mjs';
 
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const POLL_INTERVAL_SECONDS = parseInt(process.env.POLL_INTERVAL_SECONDS || '60', 10);
@@ -174,7 +176,37 @@ async function runWorker() {
         // Continue - don't crash worker on state errors
       }
 
-      // TODO: FASE 5 - Add strategy engine here
+      // FASE 5: Strategy Evaluator
+      try {
+        const SYMBOL = process.env.SYMBOL || 'BTC-PERPETUAL';
+        
+        const proposal = await evaluateStrategy({ symbol: SYMBOL });
+        
+        if (proposal) {
+          // Save proposal
+          const saved = await saveProposal(proposal);
+          if (saved) {
+            log('info', 'Proposal created', {
+              direction: saved.direction,
+              entry: saved.entry_price,
+              sl: saved.stop_loss,
+              tp: saved.take_profit,
+              rr: saved.rr,
+              reason: saved.reason,
+            });
+          }
+        } else {
+          log('debug', 'No setup found', {
+            symbol: SYMBOL,
+          });
+        }
+      } catch (strategyError) {
+        log('error', 'Strategy evaluator failed', {
+          error: strategyError.message,
+        });
+        // Continue - don't crash worker on strategy errors
+      }
+
       // TODO: FASE 6 - Add paper trading here
       // TODO: FASE 7 - Add live execution here
 

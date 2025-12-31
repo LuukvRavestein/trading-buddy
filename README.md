@@ -23,6 +23,7 @@ De bot bestaat uit 5 lagen:
 6. Klik **Run** (of Ctrl+Enter)
 7. Je zou moeten zien: "Success. No rows returned"
 8. **Voor State Builder**: Run ook `supabase/migrations/002_update_timeframe_state.sql` om de `timeframe_state` tabel te updaten
+9. **Voor Strategy Evaluator**: Run ook `supabase/migrations/003_update_trade_proposals.sql` om de `trade_proposals` tabel te updaten
 
 ### 2. Supabase API Keys
 
@@ -79,6 +80,12 @@ MAX_TRADES_PER_DAY=5
 MAX_SL_PCT=0.6
 MIN_RR=2
 
+# Strategy Configuration
+MIN_RISK_PCT=0.1  # Minimum risk percentage (0.1%)
+TARGET_RR=2.0  # Target risk/reward ratio
+ATR_SL_MULTIPLIER=0.2  # ATR multiplier for stop loss buffer
+PROPOSAL_DUPLICATE_WINDOW_MIN=10  # Minutes to prevent duplicate proposals
+
 # Logging
 LOG_LEVEL=info  # debug, info, warn, error
 ```
@@ -111,6 +118,20 @@ LOG_LEVEL=info  # debug, info, warn, error
      "candlesProcessed": 200
    }
    ```
+6. **Strategy Evaluator logs**: Zoek naar "Proposal created" of "No setup found", bijvoorbeeld:
+   ```json
+   {
+     "timestamp": "2025-01-01T12:00:00.000Z",
+     "level": "info",
+     "message": "Proposal created",
+     "direction": "long",
+     "entry": "87650.5",
+     "sl": "87420.3",
+     "tp": "88110.9",
+     "rr": "2.0",
+     "reason": "UP 15m + UP 5m + 1m CHoCH long"
+   }
+   ```
 
 ### Supabase Tables
 
@@ -118,7 +139,7 @@ LOG_LEVEL=info  # debug, info, warn, error
 2. Check de volgende tabellen:
    - `candles` - Market data (zou moeten groeien elke minuut)
    - `timeframe_state` - Computed state (trend, ATR, swings, BOS/CHoCH)
-   - `trade_proposals` - Generated signals (nog niet actief)
+   - `trade_proposals` - Generated trade signals (✅ actief - wordt gevuld door strategy evaluator)
    - `paper_trades` - Simulated trades (nog niet actief)
 
 #### Verifiëren dat timeframe_state wordt geüpdatet:
@@ -135,6 +156,32 @@ LOG_LEVEL=info  # debug, info, warn, error
    WHERE symbol = 'BTC-PERPETUAL'
    ORDER BY timeframe_min, ts DESC;
    ```
+
+#### Verifiëren dat trade_proposals wordt gevuld:
+
+1. Ga naar Supabase → **Table Editor** → `trade_proposals`
+2. Je zou rijen moeten zien wanneer:
+   - HTF trends aligneren (15m + 5m beide up voor long, beide down voor short)
+   - LTF trigger firet (1m CHoCH of BOS in dezelfde richting)
+3. Check proposal details:
+   ```sql
+   SELECT 
+     direction,
+     entry_price,
+     stop_loss,
+     take_profit,
+     rr,
+     reason,
+     created_at
+   FROM trade_proposals
+   WHERE symbol = 'BTC-PERPETUAL'
+   ORDER BY created_at DESC
+   LIMIT 10;
+   ```
+4. Verifieer:
+   - `rr` ≈ 2.0 (risk/reward ratio)
+   - `entry_price` tussen `stop_loss` en `take_profit`
+   - `reason` bevat HTF context + LTF trigger
 
 ## 🔧 Development
 
@@ -186,7 +233,7 @@ Het project is opgebouwd in fases:
 - ✅ **FASE 2**: Deribit API client (candles)
 - ✅ **FASE 3**: Ingest loop (candles → supabase)
 - ✅ **FASE 4**: State builder (trend/ATR/swing/BOS/CHoCH)
-- ⏳ **FASE 5**: Strategy engine (setup detectie)
+- ✅ **FASE 5**: Strategy evaluator (setup detectie + trade proposals)
 - ⏳ **FASE 6**: Paper trading + validatie
 - ⏳ **FASE 7**: Live execution
 
