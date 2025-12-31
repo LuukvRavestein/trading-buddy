@@ -181,7 +181,11 @@ async function runWorker() {
       try {
         const SYMBOL = process.env.SYMBOL || 'BTC-PERPETUAL';
         
-        const proposal = await evaluateStrategy({ symbol: SYMBOL });
+        // Compute consistent "now" timestamp for this iteration
+        const nowMs = Date.now();
+        const nowIso = new Date(nowMs).toISOString();
+        
+        const proposal = await evaluateStrategy({ symbol: SYMBOL, nowMs, nowIso });
         
         if (proposal) {
           // Save proposal

@@ -18,10 +18,18 @@ const STRATEGY_DEBUG = process.env.STRATEGY_DEBUG === '1';
  * 
  * @param {object} options
  * @param {string} options.symbol - Symbol (e.g., 'BTC-PERPETUAL')
+ * @param {number} options.nowMs - Current timestamp in milliseconds (required)
+ * @param {string} options.nowIso - Current timestamp as ISO string (optional, for debug)
  * @returns {Promise<object|null>} Proposal object or null
  */
-export async function evaluateStrategy({ symbol }) {
+export async function evaluateStrategy({ symbol, nowMs, nowIso }) {
   try {
+    // Validate required parameters
+    if (!nowMs || isNaN(nowMs)) {
+      console.error('[strategy] Invalid nowMs parameter');
+      return null;
+    }
+    
     // Fetch latest timeframe_state for 1m, 5m, 15m
     const [state1m, state5m, state15m] = await Promise.all([
       getLatestTimeframeState({ symbol, timeframeMin: 1 }),
@@ -29,9 +37,7 @@ export async function evaluateStrategy({ symbol }) {
       getLatestTimeframeState({ symbol, timeframeMin: 15 }),
     ]);
     
-    // Validate data freshness
-    const nowMs = Date.now();
-    const nowIso = new Date(nowMs).toISOString();
+    // Validate data freshness using consistent nowMs
     const states = [
       { tf: '1m', timeframeMin: 1, state: state1m },
       { tf: '5m', timeframeMin: 5, state: state5m },
@@ -53,17 +59,17 @@ export async function evaluateStrategy({ symbol }) {
         return null;
       }
       
-      // Dynamic threshold: 2 candles + 30s buffer
-      const thresholdMs = (timeframeMin * 60_000 * 2) + 30_000;
+      // Dynamic threshold: 3 candles + 90s buffer (more tolerant)
+      const thresholdMs = (timeframeMin * 60_000 * 3) + 90_000;
       const ageMs = nowMs - tsMs;
       
       // Debug logging
       if (STRATEGY_DEBUG) {
         console.log(`[strategy] 🔍 DEBUG ${tf} freshness:`, {
-          nowIso,
+          nowIso: nowIso || new Date(nowMs).toISOString(),
+          nowMs,
           stateTs: state.ts,
           tsMs,
-          nowMs,
           ageMs,
           thresholdMs,
           isFresh: ageMs <= thresholdMs,
