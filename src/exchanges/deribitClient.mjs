@@ -19,12 +19,52 @@ const DERIBIT_HISTORY_BASE = 'https://history.deribit.com/api/v2';
 let accessToken = null;
 let tokenExpiry = null;
 
+// API test cache (in-memory, persists for worker lifetime)
+let apiTestResult = null;
+let apiTestExpiry = null;
+const API_TEST_CACHE_DURATION_MS = 60 * 60 * 1000; // 1 hour
+
 /**
  * Get Deribit environment (test or live)
  * Default to 'live' (mainnet) for production use
  */
 function getDeribitEnv() {
   return process.env.DERIBIT_ENV || 'live';
+}
+
+/**
+ * Test if Deribit API is accessible (with caching)
+ * Caches result for 1 hour to avoid spamming the API
+ * 
+ * @returns {Promise<boolean>} True if API is accessible
+ */
+async function testApiAccess() {
+  // Check cache first
+  if (apiTestResult !== null && apiTestExpiry !== null && Date.now() < apiTestExpiry) {
+    return apiTestResult;
+  }
+
+  // Only test on mainnet
+  const isMainnet = getDeribitEnv() === 'live';
+  if (!isMainnet) {
+    // For testnet, assume accessible (no need to test)
+    apiTestResult = true;
+    apiTestExpiry = Date.now() + API_TEST_CACHE_DURATION_MS;
+    return true;
+  }
+
+  try {
+    await apiRequest('/public/test', {});
+    apiTestResult = true;
+    apiTestExpiry = Date.now() + API_TEST_CACHE_DURATION_MS;
+    console.log('[deribitClient] ✅ Mainnet API is accessible (public/test OK)');
+    return true;
+  } catch (error) {
+    apiTestResult = false;
+    apiTestExpiry = Date.now() + API_TEST_CACHE_DURATION_MS;
+    console.error('[deribitClient] ❌ Mainnet API test failed:', error.message);
+    return false;
+  }
 }
 
 /**
@@ -389,13 +429,10 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
   try {
     // Try mainnet endpoints first
     if (isMainnet) {
-      // Step 1: Test if API is accessible
-      try {
-        await apiRequest('/public/test', {});
-        console.log('[deribitClient] Mainnet API is accessible (public/test OK)');
-      } catch (error) {
-        console.error('[deribitClient] Mainnet API test failed:', error.message);
-        throw new Error(`Mainnet API not accessible: ${error.message}`);
+      // Step 1: Test if API is accessible (uses cached result if available)
+      const isApiAccessible = await testApiAccess();
+      if (!isApiAccessible) {
+        throw new Error('Mainnet API not accessible (cached test result)');
       }
       
       // Step 2: Try get_tradingview_chart_data on mainnet
