@@ -249,10 +249,6 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
     throw new Error(`Unsupported timeframe: ${timeframeMin} minutes`);
   }
 
-  // Convert timestamps to seconds (Deribit uses seconds)
-  const startSeconds = Math.floor(startTs / 1000);
-  const endSeconds = Math.floor(endTs / 1000);
-
   try {
     // Deribit API expects specific parameter format
     // Try the standard format first
