@@ -5,7 +5,16 @@
  * Subscribes to trades and builds candles in real-time.
  */
 
-import WebSocket from 'ws';
+// Import ws module (Node.js WebSocket library)
+// Use dynamic import to handle ESM
+let wsModule;
+try {
+  wsModule = await import('ws');
+} catch (error) {
+  console.error('[deribitWS] Failed to import ws module:', error);
+  throw new Error('ws module not installed. Run: npm install ws');
+}
+const WebSocket = wsModule.default;
 
 const DERIBIT_WS_BASE = 'wss://www.deribit.com/ws/api/v2';
 const DERIBIT_WS_TESTNET = 'wss://test.deribit.com/ws/api/v2';
