@@ -18,7 +18,8 @@
  */
 
 import { getSupabaseClient } from './src/db/supabaseClient.js';
-import { ingestAllTimeframes, needsBackfill } from './src/ingest/marketDataIngest.js';
+import { ingestAllTimeframes, needsBackfill, initializeWebSocketFallback } from './src/ingest/marketDataIngest.js';
+import { getDataSource } from './src/ingest/candleBuilder.js';
 
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const POLL_INTERVAL_SECONDS = parseInt(process.env.POLL_INTERVAL_SECONDS || '60', 10);
@@ -75,10 +76,34 @@ async function runWorker() {
         if (!backfillDone) {
           const needsBackfillCheck = await needsBackfill();
           if (needsBackfillCheck) {
-            log('info', 'Starting backfill - fetching last 500 candles per timeframe');
-            const backfillResults = await ingestAllTimeframes(true);
-            log('info', 'Backfill complete', { results: backfillResults });
-            backfillDone = true;
+            log('info', 'Starting backfill - fetching last 100 candles per timeframe');
+            
+            try {
+              const backfillResults = await ingestAllTimeframes(true);
+              const dataSource = getDataSource();
+              log('info', 'Backfill complete', { 
+                results: backfillResults,
+                dataSource,
+              });
+              
+              // If chart_data API failed, initialize WebSocket fallback
+              if (dataSource === 'ws-candles') {
+                log('info', 'Initializing WebSocket fallback for real-time candle building');
+                await initializeWebSocketFallback();
+              }
+              
+              backfillDone = true;
+            } catch (backfillError) {
+              // If backfill fails with chart_data error, try WebSocket
+              if (backfillError.message.includes('CHART_DATA_NOT_AVAILABLE') || 
+                  backfillError.message.includes('Method not found')) {
+                log('info', 'Chart data API not available, initializing WebSocket fallback');
+                await initializeWebSocketFallback();
+                backfillDone = true;
+              } else {
+                throw backfillError;
+              }
+            }
           } else {
             log('info', 'Backfill not needed - candles already exist');
             backfillDone = true;
@@ -86,12 +111,22 @@ async function runWorker() {
         }
 
         // Incremental ingest (every iteration)
-        const ingestResults = await ingestAllTimeframes(false);
-        const totalNew = Object.values(ingestResults).reduce((sum, r) => sum + (r.newCandles || 0), 0);
-        if (totalNew > 0) {
-          log('info', 'Market data ingested', {
-            newCandles: totalNew,
-            results: ingestResults,
+        // Only if using chart_data API (WebSocket handles its own saves)
+        const dataSource = getDataSource();
+        if (dataSource === 'chart_data') {
+          const ingestResults = await ingestAllTimeframes(false);
+          const totalNew = Object.values(ingestResults).reduce((sum, r) => sum + (r.newCandles || 0), 0);
+          if (totalNew > 0) {
+            log('info', 'Market data ingested', {
+              newCandles: totalNew,
+              results: ingestResults,
+              dataSource,
+            });
+          }
+        } else {
+          // WebSocket mode: candles are saved automatically as they complete
+          log('debug', 'WebSocket mode active - candles saved in real-time', {
+            dataSource,
           });
         }
       } catch (ingestError) {

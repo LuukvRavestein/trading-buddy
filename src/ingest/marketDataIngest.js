@@ -6,6 +6,8 @@
  */
 
 import { getCandles } from '../exchanges/deribitClient.js';
+import { subscribeToTrades } from '../exchanges/deribitWebSocket.js';
+import { processTrade, setDataSource, getDataSource, onCandleComplete, getLatestCandles as getWSCandles } from './candleBuilder.js';
 import { upsertCandles, getLatestCandles } from '../db/supabaseClient.js';
 
 const SYMBOL = process.env.SYMBOL || 'BTC-PERPETUAL';
@@ -94,23 +96,59 @@ export async function ingestTimeframe(timeframeMin, backfill = false) {
       };
     }
 
-    // Fetch candles from Deribit
-    const candles = await getCandles({
-      symbol: SYMBOL,
-      timeframeMin,
-      startTs,
-      endTs,
-    });
+    // Try to fetch candles from Deribit API first
+    let candles = [];
+    let usingWebSocket = false;
 
-    if (candles.length === 0) {
+    try {
+      candles = await getCandles({
+        symbol: SYMBOL,
+        timeframeMin,
+        startTs,
+        endTs,
+      });
+      setDataSource('chart_data');
+    } catch (error) {
+      // If chart_data API is not available, use WebSocket fallback
+      if (error.message === 'CHART_DATA_NOT_AVAILABLE') {
+        console.log(`[ingest] Using WebSocket fallback for timeframe ${timeframeMin}`);
+        setDataSource('ws-candles');
+        usingWebSocket = true;
+        
+        // For WebSocket, we can only get 1m candles in real-time
+        // Higher timeframes need to be aggregated
+        if (timeframeMin === 1) {
+          // Get latest candles from WebSocket builder
+          candles = getWSCandles(SYMBOL, 100);
+          
+          // Filter by time range
+          candles = candles.filter(c => c.t >= startTs && c.t <= endTs);
+        } else {
+          // For higher timeframes, we need to aggregate from 1m
+          // For now, return empty - aggregation will be handled separately
+          return {
+            timeframeMin,
+            newCandles: 0,
+            skipped: false,
+            reason: 'WebSocket mode: higher timeframes need aggregation (not yet implemented)',
+            dataSource: 'ws-candles',
+          };
+        }
+      } else {
+        // Other errors, rethrow
+        throw error;
+      }
+    }
+
+    if (candles.length === 0 && !usingWebSocket) {
       // "no_data" is normal for testnet or when requesting future dates
-      // Don't treat this as an error, just return empty result
       return {
         timeframeMin,
         newCandles: 0,
         skipped: false,
         reason: 'No candles returned from Deribit (no_data)',
         note: 'This is normal for testnet or when data is not available for the requested period',
+        dataSource: getDataSource(),
       };
     }
 
@@ -126,7 +164,8 @@ export async function ingestTimeframe(timeframeMin, backfill = false) {
       timeframeMin,
       newCandles: candles.length,
       skipped: false,
-      latestTimestamp: new Date(candles[candles.length - 1].t).toISOString(),
+      latestTimestamp: candles.length > 0 ? new Date(candles[candles.length - 1].t).toISOString() : null,
+      dataSource: getDataSource(),
     };
   } catch (error) {
     console.error(`[ingest] Error ingesting timeframe ${timeframeMin}:`, error);
@@ -176,6 +215,45 @@ export async function needsBackfill() {
     console.error('[ingest] Error checking backfill status:', error);
     // If error, assume we need backfill
     return true;
+  }
+}
+
+/**
+ * Initialize WebSocket trades subscription (for fallback mode)
+ */
+export async function initializeWebSocketFallback() {
+  try {
+    // Subscribe to trades and process them into candles
+    await subscribeToTrades(SYMBOL, (trade) => {
+      processTrade(trade, SYMBOL);
+    });
+
+    // Register callback to save completed 1m candles to Supabase
+    onCandleComplete(SYMBOL, 1, async (candleData) => {
+      try {
+        const supabaseCandle = {
+          symbol: candleData.symbol,
+          timeframe_min: candleData.timeframeMin,
+          ts: new Date(candleData.candle.t).toISOString(),
+          open: candleData.candle.o.toString(),
+          high: candleData.candle.h.toString(),
+          low: candleData.candle.l.toString(),
+          close: candleData.candle.c.toString(),
+          volume: candleData.candle.v.toString(),
+          source: 'deribit_ws',
+        };
+        
+        await upsertCandles([supabaseCandle]);
+        console.log(`[ingest] Saved 1m candle from WebSocket: ${supabaseCandle.ts}`);
+      } catch (error) {
+        console.error('[ingest] Error saving WebSocket candle:', error);
+      }
+    });
+
+    console.log(`[ingest] ✅ WebSocket fallback initialized for ${SYMBOL}`);
+  } catch (error) {
+    console.error('[ingest] Error initializing WebSocket fallback:', error);
+    throw error;
   }
 }
 

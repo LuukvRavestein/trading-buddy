@@ -272,20 +272,41 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
       endDate: new Date(endTs).toISOString(),
     });
 
-    // Deribit mainnet doesn't have get_tradingview_chart_data
-    // Use history.deribit.com for historical data on mainnet
+    // Try mainnet endpoints first
     const isMainnet = getDeribitEnv() === 'live';
     
     if (isMainnet) {
-      // For mainnet, use history API
-      console.log('[deribitClient] Using history.deribit.com for mainnet historical data');
-      return await getCandlesFromHistory(symbol, timeframeMin, startTs, endTs, resolution);
+      // Step 1: Test if API is accessible
+      try {
+        await apiRequest('/public/test', {});
+        console.log('[deribitClient] Mainnet API is accessible (public/test OK)');
+      } catch (error) {
+        console.error('[deribitClient] Mainnet API test failed:', error.message);
+        throw new Error(`Mainnet API not accessible: ${error.message}`);
+      }
+      
+      // Step 2: Try get_tradingview_chart_data on mainnet
+      const endpoint = '/public/get_tradingview_chart_data';
+      try {
+        const result = await apiRequest(endpoint, params);
+        console.log(`[deribitClient] ✅ Using chart_data API (mainnet)`);
+        return processCandleResult(result);
+      } catch (error) {
+        // If Method not found, we'll use WebSocket fallback
+        if (error.message.includes('Method not found') || error.message.includes('-32601')) {
+          console.log(`[deribitClient] ⚠️  chart_data API not available (Method not found)`);
+          console.log(`[deribitClient] 🔄 Falling back to WebSocket trades → candles builder`);
+          throw new Error('CHART_DATA_NOT_AVAILABLE'); // Special error to trigger WebSocket fallback
+        }
+        // For other errors, throw immediately
+        throw error;
+      }
     } else {
       // For testnet, try the standard endpoint
       const endpoint = '/public/get_tradingview_chart_data';
       try {
         const result = await apiRequest(endpoint, params);
-        console.log(`[deribitClient] Successfully fetched from testnet`);
+        console.log(`[deribitClient] ✅ Using chart_data API (testnet)`);
         return processCandleResult(result);
       } catch (error) {
         console.error('[deribitClient] Testnet endpoint failed:', error.message);
