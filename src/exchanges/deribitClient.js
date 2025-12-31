@@ -101,7 +101,9 @@ let requestIdCounter = 1;
 
 async function apiRequest(endpoint, params = {}) {
   const baseUrl = getBaseUrl();
-  const url = `${baseUrl}${endpoint}`;
+  // Deribit API v2 uses a single endpoint URL for all methods
+  // The method name goes in the JSON-RPC request, not in the URL
+  const url = `${baseUrl}`;
 
   // Public endpoints don't need auth
   const isPublic = endpoint.startsWith('/public/');
