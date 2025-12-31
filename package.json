@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "description": "Autonomous Bitcoin daytrading bot for Deribit and Supabase (cloud-only)",
   "type": "module",
-  "main": "worker.js",
+  "main": "worker.mjs",
   "scripts": {
     "start": "node worker.mjs",
     "dev": "node worker.mjs",
