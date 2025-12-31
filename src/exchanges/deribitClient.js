@@ -111,17 +111,42 @@ async function apiRequest(endpoint, params = {}) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
+  // Deribit uses JSON-RPC 2.0 format for some endpoints
+  // Try both formats: direct params and JSON-RPC
+  const requestBody = JSON.stringify(params);
+
   try {
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(params),
+      body: requestBody,
     });
 
-    const data = await response.json();
+    let data;
+    try {
+      data = await response.json();
+    } catch (jsonError) {
+      const text = await response.text();
+      console.error(`[deribitClient] Failed to parse JSON response:`, {
+        endpoint,
+        status: response.status,
+        responseText: text.substring(0, 500),
+      });
+      throw new Error(`Invalid JSON response from Deribit: ${text.substring(0, 200)}`);
+    }
 
     if (!response.ok || data.error) {
-      const errorMsg = data.error?.message || data.error || `HTTP ${response.status}`;
+      // Log full error details for debugging
+      console.error(`[deribitClient] API error details:`, {
+        endpoint,
+        params,
+        requestBody,
+        status: response.status,
+        error: data.error,
+        fullResponse: JSON.stringify(data).substring(0, 1000),
+      });
+      
+      const errorMsg = data.error?.message || JSON.stringify(data.error) || `HTTP ${response.status}`;
       throw new Error(`Deribit API error: ${errorMsg}`);
     }
 
@@ -175,15 +200,35 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
   const endSeconds = Math.floor(endTs / 1000);
 
   try {
-    const result = await apiRequest('/public/get_tradingview_chart_data', {
+    // Deribit API expects specific parameter format
+    // Try the standard format first
+    const params = {
       instrument_name: symbol,
       start_timestamp: startSeconds,
       end_timestamp: endSeconds,
       resolution,
+    };
+
+    console.log(`[deribitClient] Fetching candles:`, {
+      symbol,
+      timeframeMin,
+      resolution,
+      startSeconds,
+      endSeconds,
+      startDate: new Date(startTs).toISOString(),
+      endDate: new Date(endTs).toISOString(),
     });
 
+    const result = await apiRequest('/public/get_tradingview_chart_data', params);
+
     // Deribit returns data in format: {ticks: [timestamps], status: "ok", volume: [volumes], open: [opens], close: [closes], high: [highs], low: [lows]}
-    if (!result || !result.ticks || result.ticks.length === 0) {
+    if (!result) {
+      console.warn('[deribitClient] No result returned from Deribit');
+      return [];
+    }
+
+    if (!result.ticks || result.ticks.length === 0) {
+      console.warn('[deribitClient] No ticks in result:', { result });
       return [];
     }
 
@@ -200,6 +245,7 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
       });
     }
 
+    console.log(`[deribitClient] Successfully fetched ${candles.length} candles`);
     return candles;
   } catch (error) {
     console.error('[deribitClient] getCandles error:', error);
