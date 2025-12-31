@@ -209,7 +209,7 @@ async function apiRequest(endpoint, params = {}) {
   
   // If all method variants failed, throw last error
   throw lastError || new Error(`Deribit API error: All method name variants failed for ${endpoint}`);
-
+}
 
 /**
  * Get candles from Deribit
