@@ -63,7 +63,7 @@ SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 # Deribit
 DERIBIT_CLIENT_ID=your_client_id
 DERIBIT_CLIENT_SECRET=your_client_secret
-DERIBIT_ENV=test  # of 'live' voor productie
+DERIBIT_ENV=live  # 'live' voor mainnet (aanbevolen), 'test' voor testnet
 
 # Bot Configuration
 BOT_MODE=paper  # of 'live' voor live trading
@@ -139,7 +139,8 @@ Het project is opgebouwd in fases:
 
 - **Service Role Key**: Gebruik ALTIJD `SUPABASE_SERVICE_ROLE_KEY` (niet anon key) voor server-side
 - **API Keys**: Bewaar nooit API keys in code - gebruik altijd environment variables
-- **Testnet First**: Start altijd met `DERIBIT_ENV=test` en `BOT_MODE=paper`
+- **Paper Mode First**: Start altijd met `BOT_MODE=paper` voor testing, zelfs met live Deribit API
+- **Deribit Environment**: Gebruik `DERIBIT_ENV=live` voor mainnet (aanbevolen) of `test` voor testnet
 
 ## 📚 Documentatie
 

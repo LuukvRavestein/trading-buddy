@@ -19,9 +19,10 @@ let tokenExpiry = null;
 
 /**
  * Get Deribit environment (test or live)
+ * Default to 'live' (mainnet) for production use
  */
 function getDeribitEnv() {
-  return process.env.DERIBIT_ENV || 'test';
+  return process.env.DERIBIT_ENV || 'live';
 }
 
 /**
