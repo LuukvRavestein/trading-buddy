@@ -5,8 +5,8 @@
   "type": "module",
   "main": "worker.js",
   "scripts": {
-    "start": "node worker.js",
-    "dev": "node worker.js",
+    "start": "node worker.mjs",
+    "dev": "node worker.mjs",
     "test": "echo \"No tests yet\""
   },
   "keywords": [

@@ -5,7 +5,7 @@
  * Handles backfill on first run and incremental updates.
  */
 
-import { getCandles } from '../exchanges/deribitClient.js';
+import { getCandles } from '../exchanges/deribitClient.mjs';
 import { subscribeToTrades } from '../exchanges/deribitWebSocket.js';
 import { processTrade, setDataSource, getDataSource, onCandleComplete, getLatestCandles as getWSCandles } from './candleBuilder.js';
 import { upsertCandles, getLatestCandles } from '../db/supabaseClient.js';

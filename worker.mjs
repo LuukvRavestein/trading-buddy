@@ -17,44 +17,10 @@
  * - LOG_LEVEL (default: 'info')
  */
 
-// TEMPORARY: Runtime diagnostics to verify package.json is loaded correctly
-import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
-
-try {
-  const cwd = process.cwd();
-  const packageJsonPath = join(cwd, 'package.json');
-  const packageJsonExists = existsSync(packageJsonPath);
-  
-  console.log('=== RUNTIME DIAGNOSTICS ===');
-  console.log('process.cwd():', cwd);
-  console.log('package.json exists:', packageJsonExists);
-  console.log('package.json path:', packageJsonPath);
-  
-  if (packageJsonExists) {
-    try {
-      const packageJsonContent = readFileSync(packageJsonPath, 'utf8');
-      console.log('package.json contents:');
-      console.log(packageJsonContent);
-      
-      // Parse and show type field specifically
-      const packageJson = JSON.parse(packageJsonContent);
-      console.log('package.json.type:', packageJson.type);
-      console.log('package.json.engines:', JSON.stringify(packageJson.engines));
-    } catch (parseError) {
-      console.error('Error reading/parsing package.json:', parseError.message);
-    }
-  } else {
-    console.error('ERROR: package.json not found at', packageJsonPath);
-  }
-  console.log('=== END DIAGNOSTICS ===');
-} catch (diagError) {
-  console.error('Error in diagnostics:', diagError.message);
-  console.error('Stack:', diagError.stack);
-}
+console.log("Worker started OK (ESM)");
 
 import { getSupabaseClient } from './src/db/supabaseClient.js';
-import { ingestAllTimeframes, needsBackfill, initializeWebSocketFallback } from './src/ingest/marketDataIngest.js';
+import { ingestAllTimeframes, needsBackfill, initializeWebSocketFallback } from './src/ingest/marketDataIngest.mjs';
 import { getDataSource } from './src/ingest/candleBuilder.js';
 
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
