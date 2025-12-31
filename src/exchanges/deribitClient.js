@@ -235,7 +235,39 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
       endDate: new Date(endTs).toISOString(),
     });
 
-    const result = await apiRequest('/public/get_tradingview_chart_data', params);
+    // Try different possible endpoint names
+    // Deribit mainnet might use a different method name than testnet
+    const possibleEndpoints = [
+      '/public/get_tradingview_chart_data',
+      '/public/get_chart_data',
+      '/public/tradingview_chart_data',
+    ];
+
+    let lastError = null;
+    let result = null;
+
+    for (const endpoint of possibleEndpoints) {
+      try {
+        result = await apiRequest(endpoint, params);
+        // If we get here, the endpoint worked
+        console.log(`[deribitClient] Successfully used endpoint: ${endpoint}`);
+        break;
+      } catch (error) {
+        lastError = error;
+        // If it's "Method not found", try next endpoint
+        if (error.message.includes('Method not found') || error.message.includes('-32601')) {
+          console.log(`[deribitClient] Endpoint ${endpoint} not found, trying next...`);
+          continue;
+        }
+        // For other errors, throw immediately
+        throw error;
+      }
+    }
+
+    // If all endpoints failed, throw the last error
+    if (!result) {
+      throw lastError || new Error('All endpoints failed - Deribit chart data endpoint not found');
+    }
 
     // Deribit returns data in format: {ticks: [timestamps], status: "ok", volume: [volumes], open: [opens], close: [closes], high: [highs], low: [lows]}
     if (!result) {
