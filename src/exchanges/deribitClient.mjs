@@ -141,6 +141,8 @@ async function apiRequest(endpoint, params = {}) {
   let jsonRpcRequest = null;
   
   // Try both method name formats
+  const enableDebug = process.env.DERIBIT_DEBUG === '1';
+  
   for (const methodName of methodVariants) {
     jsonRpcRequest = {
       jsonrpc: '2.0',
@@ -150,6 +152,14 @@ async function apiRequest(endpoint, params = {}) {
     };
     
     const requestBody = JSON.stringify(jsonRpcRequest);
+    
+    if (enableDebug) {
+      console.log('[deribitClient] 🔍 DEBUG: JSON-RPC request:', {
+        url,
+        method: methodName,
+        jsonRpcRequest: JSON.stringify(jsonRpcRequest, null, 2),
+      });
+    }
     
     try {
       const response = await fetch(url, {
@@ -195,7 +205,19 @@ async function apiRequest(endpoint, params = {}) {
       }
 
       // Success - return result
-      return data.result || data;
+      const result = data.result || data;
+      
+      if (enableDebug) {
+        console.log('[deribitClient] 🔍 DEBUG: JSON-RPC response:', {
+          method: methodName,
+          hasResult: !!data.result,
+          hasError: !!data.error,
+          resultKeys: result ? Object.keys(result) : [],
+          resultStatus: result?.status || 'N/A',
+        });
+      }
+      
+      return result;
     } catch (error) {
       // If it's "Method not found", try next variant
       if (error.message.includes('Method not found') || error.message.includes('-32601')) {
@@ -249,21 +271,21 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
     throw new Error(`Unsupported timeframe: ${timeframeMin} minutes`);
   }
 
-  // Consistent timestamp variables: milliseconds (input) and seconds (for Deribit API)
+  // Consistent timestamp variables: milliseconds (Deribit API expects milliseconds)
   const startMs = Number(startTs);
   const endMs = Number(endTs);
-  const startSeconds = Math.floor(startMs / 1000);
-  const endSeconds = Math.floor(endMs / 1000);
 
-  // Log derived values for debugging
-  console.log('[deribitClient] Timestamp conversion:', {
-    startMs,
-    endMs,
-    startSeconds,
-    endSeconds,
-    startDate: new Date(startMs).toISOString(),
-    endDate: new Date(endMs).toISOString(),
-  });
+  // Debug logging (behind env var)
+  const enableDebug = process.env.DERIBIT_DEBUG === '1';
+  
+  if (enableDebug) {
+    console.log('[deribitClient] 🔍 DEBUG: Timestamp values:', {
+      startMs,
+      endMs,
+      startDate: new Date(startMs).toISOString(),
+      endDate: new Date(endMs).toISOString(),
+    });
+  }
 
   // Diagnostic mode: test both milliseconds and seconds on mainnet
   const isMainnet = getDeribitEnv() === 'live';
@@ -271,6 +293,10 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
 
   if (enableDiagnostics) {
     console.log('[deribitClient] 🔍 DIAGNOSTIC MODE: Testing both timestamp units');
+    
+    // Calculate seconds for diagnostic testing
+    const startSeconds = Math.floor(startMs / 1000);
+    const endSeconds = Math.floor(endMs / 1000);
     
     // Test with SECONDS (Deribit standard)
     const paramsSeconds = {
@@ -343,25 +369,22 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
     console.log('[deribitClient] ⚠️  Both timestamp units failed or returned no data');
   }
 
-  // Standard params (use seconds - Deribit API standard)
+  // Standard params (use milliseconds - Deribit API expects milliseconds)
   const params = {
     instrument_name: symbol,
-    start_timestamp: startSeconds,
-    end_timestamp: endSeconds,
+    start_timestamp: startMs,
+    end_timestamp: endMs,
     resolution,
   };
 
-  console.log(`[deribitClient] Fetching candles:`, {
-    symbol,
-    timeframeMin,
-    resolution,
-    startMs,
-    endMs,
-    startSeconds,
-    endSeconds,
-    startDate: new Date(startMs).toISOString(),
-    endDate: new Date(endMs).toISOString(),
-  });
+  if (enableDebug) {
+    console.log('[deribitClient] 🔍 DEBUG: Request params:', {
+      symbol,
+      timeframeMin,
+      resolution,
+      params: JSON.stringify(params, null, 2),
+    });
+  }
 
   try {
     // Try mainnet endpoints first
@@ -378,7 +401,32 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
       // Step 2: Try get_tradingview_chart_data on mainnet
       const endpoint = '/public/get_tradingview_chart_data';
       try {
+        if (enableDebug) {
+          console.log('[deribitClient] 🔍 DEBUG: Making JSON-RPC request:', {
+            method: endpoint,
+            params: JSON.stringify(params, null, 2),
+            url: getBaseUrl(),
+          });
+        }
+        
         const result = await apiRequest(endpoint, params);
+        
+        if (enableDebug) {
+          console.log('[deribitClient] 🔍 DEBUG: Raw response:', {
+            status: result?.status || 'N/A',
+            error: result?.error || null,
+            ticksLength: result?.ticks?.length || 0,
+            openLength: result?.open?.length || 0,
+            highLength: result?.high?.length || 0,
+            lowLength: result?.low?.length || 0,
+            closeLength: result?.close?.length || 0,
+            volumeLength: result?.volume?.length || 0,
+            responseKeys: result ? Object.keys(result) : [],
+            firstTick: result?.ticks?.[0] || null,
+            lastTick: result?.ticks?.[result?.ticks?.length - 1] || null,
+          });
+        }
+        
         console.log(`[deribitClient] ✅ Using chart_data API (mainnet)`);
         return processCandleResult(result);
       } catch (error) {
@@ -395,7 +443,32 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
       // For testnet, try the standard endpoint
       const endpoint = '/public/get_tradingview_chart_data';
       try {
+        if (enableDebug) {
+          console.log('[deribitClient] 🔍 DEBUG: Making JSON-RPC request:', {
+            method: endpoint,
+            params: JSON.stringify(params, null, 2),
+            url: getBaseUrl(),
+          });
+        }
+        
         const result = await apiRequest(endpoint, params);
+        
+        if (enableDebug) {
+          console.log('[deribitClient] 🔍 DEBUG: Raw response:', {
+            status: result?.status || 'N/A',
+            error: result?.error || null,
+            ticksLength: result?.ticks?.length || 0,
+            openLength: result?.open?.length || 0,
+            highLength: result?.high?.length || 0,
+            lowLength: result?.low?.length || 0,
+            closeLength: result?.close?.length || 0,
+            volumeLength: result?.volume?.length || 0,
+            responseKeys: result ? Object.keys(result) : [],
+            firstTick: result?.ticks?.[0] || null,
+            lastTick: result?.ticks?.[result?.ticks?.length - 1] || null,
+          });
+        }
+        
         console.log(`[deribitClient] ✅ Using chart_data API (testnet)`);
         return processCandleResult(result);
       } catch (error) {
