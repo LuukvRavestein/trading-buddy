@@ -150,10 +150,59 @@ async function supabaseRequest(method, path, body = null, options = {}) {
 // ============================================================================
 
 /**
+ * Normalize timestamp to ISO string format
+ * Handles various input formats and prevents invalid dates
+ * 
+ * @param {string|number|Date} input - Timestamp in various formats
+ * @returns {string} ISO string timestamp
+ * @throws {Error} If input cannot be converted to valid timestamp
+ */
+function normalizeTs(input) {
+  if (typeof input === 'string') {
+    // Assume ISO string, but validate year range
+    const date = new Date(input);
+    if (isNaN(date.getTime())) {
+      throw new Error(`Invalid ISO string timestamp: ${input}`);
+    }
+    const year = date.getFullYear();
+    if (year < 2009 || year > 2100) {
+      throw new Error(`Invalid year in ISO string: ${year} (from ${input})`);
+    }
+    return input; // Return as-is if valid
+  }
+  
+  if (input instanceof Date) {
+    return input.toISOString();
+  }
+  
+  if (typeof input === 'number') {
+    let date;
+    // If number < 1e11 (100000000000), treat as seconds and convert to ms
+    // Otherwise treat as milliseconds
+    if (input < 1e11) {
+      date = new Date(input * 1000);
+    } else {
+      date = new Date(input);
+    }
+    
+    if (isNaN(date.getTime())) {
+      throw new Error(`Invalid numeric timestamp: ${input}`);
+    }
+    
+    return date.toISOString();
+  }
+  
+  throw new Error(`Unsupported timestamp type: ${typeof input} (value: ${input})`);
+}
+
+/**
  * Upsert candles (insert or update if exists)
  * Uses PostgREST UPSERT via ON CONFLICT
  * 
- * @param {Array} candles - Array of candle objects
+ * Normalizes all timestamps before upserting to prevent invalid date errors.
+ * Skips candles with invalid timestamps (year < 2009 or > 2100).
+ * 
+ * @param {Array} candles - Array of candle objects with ts field
  * @returns {Promise<Array>} Upserted candles
  */
 export async function upsertCandles(candles) {
@@ -162,6 +211,81 @@ export async function upsertCandles(candles) {
   }
 
   if (!candles || candles.length === 0) {
+    return [];
+  }
+
+  const enableDebug = process.env.SUPABASE_DEBUG === '1';
+  
+  // Normalize all timestamps and filter out invalid ones
+  const validCandles = [];
+  const skippedCandles = [];
+  let minYear = Infinity;
+  let maxYear = -Infinity;
+  let sampleFirstTs = null;
+  let sampleFirstTsType = null;
+  
+  for (let i = 0; i < candles.length; i++) {
+    const candle = candles[i];
+    
+    try {
+      // Normalize the timestamp
+      const normalizedTs = normalizeTs(candle.ts);
+      const date = new Date(normalizedTs);
+      const year = date.getFullYear();
+      
+      // Guard: validate year range (2009-2100)
+      if (year < 2009 || year > 2100) {
+        const timeframeMin = candle.timeframe_min || 'unknown';
+        console.error(`[supabase] Invalid timestamp year: ${year} (ts: ${candle.ts}, timeframe: ${timeframeMin}). Skipping candle.`);
+        skippedCandles.push({ index: i, ts: candle.ts, year, timeframeMin });
+        continue; // Skip this candle
+      }
+      
+      // Track min/max year for logging
+      if (year < minYear) minYear = year;
+      if (year > maxYear) maxYear = year;
+      
+      // Capture first candle's ts for logging
+      if (i === 0) {
+        sampleFirstTs = normalizedTs;
+        sampleFirstTsType = typeof candle.ts;
+      }
+      
+      // Add normalized candle
+      validCandles.push({
+        ...candle,
+        ts: normalizedTs,
+      });
+    } catch (error) {
+      const timeframeMin = candle.timeframe_min || 'unknown';
+      console.error(`[supabase] Failed to normalize timestamp (ts: ${candle.ts}, timeframe: ${timeframeMin}):`, error.message);
+      skippedCandles.push({ index: i, ts: candle.ts, error: error.message, timeframeMin });
+      continue; // Skip this candle
+    }
+  }
+  
+  // Debug logging
+  if (enableDebug) {
+    const timeframeMin = validCandles.length > 0 
+      ? validCandles[0].timeframe_min 
+      : (candles.length > 0 ? candles[0].timeframe_min : 'unknown');
+    
+    console.log('[supabase] 🔍 DEBUG: Normalized candles before upsert:', {
+      timeframeMin,
+      totalInput: candles.length,
+      validCount: validCandles.length,
+      skippedCount: skippedCandles.length,
+      sampleFirstTs,
+      sampleFirstTsType,
+      minYear: minYear === Infinity ? null : minYear,
+      maxYear: maxYear === -Infinity ? null : maxYear,
+      skippedDetails: skippedCandles.length > 0 ? skippedCandles.slice(0, 5) : [], // Show first 5 skipped
+    });
+  }
+  
+  if (validCandles.length === 0) {
+    const timeframeMin = candles.length > 0 ? candles[0].timeframe_min : 'unknown';
+    console.warn(`[supabase] No valid candles to upsert after normalization (timeframe: ${timeframeMin}, skipped: ${skippedCandles.length})`);
     return [];
   }
 
@@ -181,7 +305,7 @@ export async function upsertCandles(candles) {
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(candles),
+      body: JSON.stringify(validCandles),
     });
 
     if (!response.ok) {
