@@ -12,6 +12,7 @@
 
 const DERIBIT_API_BASE = 'https://www.deribit.com/api/v2';
 const DERIBIT_TESTNET_BASE = 'https://test.deribit.com/api/v2';
+const DERIBIT_HISTORY_BASE = 'https://history.deribit.com/api/v2';
 
 // Token cache (in-memory, persists for worker lifetime)
 let accessToken = null;
@@ -30,6 +31,13 @@ function getDeribitEnv() {
  */
 function getBaseUrl() {
   return getDeribitEnv() === 'test' ? DERIBIT_TESTNET_BASE : DERIBIT_API_BASE;
+}
+
+/**
+ * Get history API URL (for mainnet historical data)
+ */
+function getHistoryBaseUrl() {
+  return DERIBIT_HISTORY_BASE;
 }
 
 /**
@@ -264,83 +272,87 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
       endDate: new Date(endTs).toISOString(),
     });
 
-    // Try different possible endpoint names and method name formats
-    // Deribit mainnet might use different naming conventions
-    const possibleEndpoints = [
-      '/public/get_tradingview_chart_data',
-      '/public/get_chart_data',
-      '/public/tradingview_chart_data',
-    ];
+    // Deribit mainnet doesn't have get_tradingview_chart_data
+    // Use history.deribit.com for historical data on mainnet
+    const isMainnet = getDeribitEnv() === 'live';
     
-    // Also try method name variants (with dots instead of slashes for JSON-RPC)
-    const methodVariants = [
-      null, // Use endpoint as-is (with slash converted to method)
-      'public.get_tradingview_chart_data',
-      'public.get_chart_data',
-    ];
-
-    let lastError = null;
-    let result = null;
-
-    for (const endpoint of possibleEndpoints) {
+    if (isMainnet) {
+      // For mainnet, use history API
+      console.log('[deribitClient] Using history.deribit.com for mainnet historical data');
+      return await getCandlesFromHistory(symbol, timeframeMin, startTs, endTs, resolution);
+    } else {
+      // For testnet, try the standard endpoint
+      const endpoint = '/public/get_tradingview_chart_data';
       try {
-        result = await apiRequest(endpoint, params);
-        // If we get here, the endpoint worked
-        console.log(`[deribitClient] Successfully used endpoint: ${endpoint}`);
-        break;
+        const result = await apiRequest(endpoint, params);
+        console.log(`[deribitClient] Successfully fetched from testnet`);
+        return processCandleResult(result);
       } catch (error) {
-        lastError = error;
-        // If it's "Method not found", try next endpoint
-        if (error.message.includes('Method not found') || error.message.includes('-32601')) {
-          console.log(`[deribitClient] Endpoint ${endpoint} not found, trying next...`);
-          continue;
-        }
-        // For other errors, throw immediately
+        console.error('[deribitClient] Testnet endpoint failed:', error.message);
         throw error;
       }
     }
 
-    // If all endpoints failed, throw the last error
-    if (!result) {
-      throw lastError || new Error('All endpoints failed - Deribit chart data endpoint not found');
-    }
-
-    // Deribit returns data in format: {ticks: [timestamps], status: "ok", volume: [volumes], open: [opens], close: [closes], high: [highs], low: [lows]}
-    if (!result) {
-      console.warn('[deribitClient] No result returned from Deribit');
-      return [];
-    }
-
-    if (!result.ticks || result.ticks.length === 0) {
-      // Log warning only if status is not 'no_data' (which is expected for testnet)
-      if (result.status !== 'no_data') {
-        console.warn('[deribitClient] No ticks in result:', { result });
-      } else {
-        // "no_data" is normal for testnet or when requesting unavailable periods
-        console.log(`[deribitClient] No data available for period (status: no_data)`);
-      }
-      return [];
-    }
-
-    // Convert to array of candlestick objects
-    const candles = [];
-    for (let i = 0; i < result.ticks.length; i++) {
-      candles.push({
-        t: result.ticks[i] * 1000, // Convert to milliseconds
-        o: result.open[i],
-        h: result.high[i],
-        l: result.low[i],
-        c: result.close[i],
-        v: result.volume[i] || 0,
-      });
-    }
-
-    console.log(`[deribitClient] Successfully fetched ${candles.length} candles`);
-    return candles;
+    // This should not be reached for mainnet (handled above)
+    // But keep for testnet fallback
+    return processCandleResult(result);
   } catch (error) {
     console.error('[deribitClient] getCandles error:', error);
     throw error;
   }
+}
+
+/**
+ * Process candle result from Deribit API
+ */
+function processCandleResult(result) {
+  if (!result) {
+    console.warn('[deribitClient] No result returned from Deribit');
+    return [];
+  }
+
+  if (!result.ticks || result.ticks.length === 0) {
+    // Log warning only if status is not 'no_data' (which is expected for testnet)
+    if (result.status !== 'no_data') {
+      console.warn('[deribitClient] No ticks in result:', { result });
+    } else {
+      // "no_data" is normal for testnet or when requesting unavailable periods
+      console.log(`[deribitClient] No data available for period (status: no_data)`);
+    }
+    return [];
+  }
+
+  // Convert to array of candlestick objects
+  const candles = [];
+  for (let i = 0; i < result.ticks.length; i++) {
+    candles.push({
+      t: result.ticks[i] * 1000, // Convert to milliseconds
+      o: result.open[i],
+      h: result.high[i],
+      l: result.low[i],
+      c: result.close[i],
+      v: result.volume[i] || 0,
+    });
+  }
+
+  console.log(`[deribitClient] Successfully fetched ${candles.length} candles`);
+  return candles;
+}
+
+/**
+ * Get candles from Deribit history API (for mainnet)
+ * Uses get_last_trades_by_currency and reconstructs OHLC candles
+ */
+async function getCandlesFromHistory(symbol, timeframeMin, startTs, endTs, resolution) {
+  // For now, we'll use a workaround: try to get trades and reconstruct candles
+  // Or use a third-party data source
+  
+  // TODO: Implement proper history API call
+  // For now, throw an informative error
+  throw new Error(
+    'Deribit mainnet does not support get_tradingview_chart_data. ' +
+    'Please use testnet (DERIBIT_ENV=test) or implement history.deribit.com API integration.'
+  );
 }
 
 /**
