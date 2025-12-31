@@ -18,6 +18,7 @@
  */
 
 import { getSupabaseClient } from './src/db/supabaseClient.js';
+import { ingestAllTimeframes, needsBackfill } from './src/ingest/marketDataIngest.js';
 
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const POLL_INTERVAL_SECONDS = parseInt(process.env.POLL_INTERVAL_SECONDS || '60', 10);
@@ -61,12 +62,45 @@ async function runWorker() {
 
   // Main loop
   let iteration = 0;
+  let backfillDone = false;
+
   while (true) {
     try {
       iteration++;
       log('info', 'Worker alive', { iteration, timestamp: new Date().toISOString() });
 
-      // TODO: FASE 3 - Add market data ingest here
+      // FASE 3: Market Data Ingest
+      try {
+        // Check if backfill is needed (only once)
+        if (!backfillDone) {
+          const needsBackfillCheck = await needsBackfill();
+          if (needsBackfillCheck) {
+            log('info', 'Starting backfill - fetching last 500 candles per timeframe');
+            const backfillResults = await ingestAllTimeframes(true);
+            log('info', 'Backfill complete', { results: backfillResults });
+            backfillDone = true;
+          } else {
+            log('info', 'Backfill not needed - candles already exist');
+            backfillDone = true;
+          }
+        }
+
+        // Incremental ingest (every iteration)
+        const ingestResults = await ingestAllTimeframes(false);
+        const totalNew = Object.values(ingestResults).reduce((sum, r) => sum + (r.newCandles || 0), 0);
+        if (totalNew > 0) {
+          log('info', 'Market data ingested', {
+            newCandles: totalNew,
+            results: ingestResults,
+          });
+        }
+      } catch (ingestError) {
+        log('error', 'Market data ingest failed', {
+          error: ingestError.message,
+        });
+        // Continue - don't crash worker on ingest errors
+      }
+
       // TODO: FASE 4 - Add state builder here
       // TODO: FASE 5 - Add strategy engine here
       // TODO: FASE 6 - Add paper trading here

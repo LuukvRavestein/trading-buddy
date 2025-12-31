@@ -151,6 +151,7 @@ async function supabaseRequest(method, path, body = null, options = {}) {
 
 /**
  * Upsert candles (insert or update if exists)
+ * Uses PostgREST UPSERT via ON CONFLICT
  * 
  * @param {Array} candles - Array of candle objects
  * @returns {Promise<Array>} Upserted candles
@@ -160,11 +161,36 @@ export async function upsertCandles(candles) {
     throw new Error('Supabase not configured');
   }
 
+  if (!candles || candles.length === 0) {
+    return [];
+  }
+
   try {
-    const result = await supabaseRequest('POST', 'candles', candles, {
-      select: '*',
+    // PostgREST UPSERT: use PATCH with Prefer: resolution=merge-duplicates
+    // and specify the unique constraint columns in the URL
+    const client = getSupabaseClient();
+    const url = `${client.url}/rest/v1/candles?on_conflict=symbol,timeframe_min,ts`;
+    
+    const headers = {
+      'apikey': client.key,
+      'Authorization': `Bearer ${client.key}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=representation,resolution=merge-duplicates',
+    };
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(candles),
     });
-    return result;
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Supabase API error: ${response.status} ${errorText.substring(0, 200)}`);
+    }
+
+    const data = await response.json();
+    return Array.isArray(data) ? data : [data];
   } catch (error) {
     console.error('[supabase] Failed to upsert candles:', error);
     throw error;
