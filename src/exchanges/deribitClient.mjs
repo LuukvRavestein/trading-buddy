@@ -334,8 +334,8 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
       console.log('[deribitClient] ✅ SECONDS result:', {
         status: resultSeconds.status,
         ticksCount: resultSeconds.ticks?.length || 0,
-        firstTick: resultSeconds.ticks?.[0] ? new Date(resultSeconds.ticks[0] * 1000).toISOString() : null,
-        lastTick: resultSeconds.ticks?.[resultSeconds.ticks?.length - 1] ? new Date(resultSeconds.ticks[resultSeconds.ticks.length - 1] * 1000).toISOString() : null,
+        firstTick: resultSeconds.ticks?.[0] ? new Date(resultSeconds.ticks[0]).toISOString() : null,
+        lastTick: resultSeconds.ticks?.[resultSeconds.ticks?.length - 1] ? new Date(resultSeconds.ticks[resultSeconds.ticks.length - 1]).toISOString() : null,
         responseKeys: Object.keys(resultSeconds),
       });
       
@@ -353,8 +353,8 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
       console.log('[deribitClient] ✅ MILLISECONDS result:', {
         status: resultMillis.status,
         ticksCount: resultMillis.ticks?.length || 0,
-        firstTick: resultMillis.ticks?.[0] ? new Date(resultMillis.ticks[0] * 1000).toISOString() : null,
-        lastTick: resultMillis.ticks?.[resultMillis.ticks?.length - 1] ? new Date(resultMillis.ticks[resultMillis.ticks.length - 1] * 1000).toISOString() : null,
+        firstTick: resultMillis.ticks?.[0] ? new Date(resultMillis.ticks[0]).toISOString() : null,
+        lastTick: resultMillis.ticks?.[resultMillis.ticks?.length - 1] ? new Date(resultMillis.ticks[resultMillis.ticks.length - 1]).toISOString() : null,
         responseKeys: Object.keys(resultMillis),
       });
       
@@ -507,15 +507,45 @@ function processCandleResult(result) {
   }
 
   // Convert to array of candlestick objects
+  // Deribit ticks[] are already in milliseconds (e.g., 1767182340000)
   const candles = [];
+  const enableDebug = process.env.DERIBIT_DEBUG === '1';
+  
   for (let i = 0; i < result.ticks.length; i++) {
+    const tickMs = Number(result.ticks[i]);
+    
+    // Guard: validate timestamp is reasonable (year between 2009 and 2100)
+    const date = new Date(tickMs);
+    const year = date.getFullYear();
+    
+    if (year < 2009 || year > 2100) {
+      console.error(`[deribitClient] Invalid timestamp detected: tickMs=${tickMs}, year=${year}, ISO=${date.toISOString()}. Skipping candle.`);
+      continue; // Skip this candle
+    }
+    
     candles.push({
-      t: result.ticks[i] * 1000, // Convert to milliseconds
+      t: tickMs, // ticks are already in milliseconds, do NOT multiply by 1000
       o: result.open[i],
       h: result.high[i],
       l: result.low[i],
       c: result.close[i],
       v: result.volume[i] || 0,
+    });
+  }
+
+  // Log first and last tick (once per timeframe) for debugging
+  if (candles.length > 0) {
+    const firstTickMs = candles[0].t;
+    const lastTickMs = candles[candles.length - 1].t;
+    const firstTsIso = new Date(firstTickMs).toISOString();
+    const lastTsIso = new Date(lastTickMs).toISOString();
+    
+    console.log('[deribitClient] First and last candle timestamps:', {
+      firstTickMs,
+      firstTsIso,
+      lastTickMs,
+      lastTsIso,
+      totalCandles: candles.length,
     });
   }
 
