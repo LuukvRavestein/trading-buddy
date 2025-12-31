@@ -25,6 +25,7 @@ import { getDataSource } from './src/ingest/candleBuilder.js';
 import { runStateUpdate } from './src/analysis/stateRunner.mjs';
 import { evaluateStrategy } from './src/strategy/strategyEvaluator.mjs';
 import { saveProposal } from './src/strategy/proposalWriter.mjs';
+import { runPaperEngine } from './src/paper/paperEngine.mjs';
 
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const POLL_INTERVAL_SECONDS = parseInt(process.env.POLL_INTERVAL_SECONDS || '60', 10);
@@ -207,7 +208,34 @@ async function runWorker() {
         // Continue - don't crash worker on strategy errors
       }
 
-      // TODO: FASE 6 - Add paper trading here
+      // FASE 6: Paper Performance Engine
+      try {
+        const SYMBOL = process.env.SYMBOL || 'BTC-PERPETUAL';
+        
+        const paperResults = await runPaperEngine({ symbol: SYMBOL });
+        
+        if (paperResults.success) {
+          if (paperResults.executed > 0 || paperResults.closed > 0 || paperResults.expired > 0) {
+            log('info', 'Paper engine results', {
+              executed: paperResults.executed,
+              closed: paperResults.closed,
+              expired: paperResults.expired,
+              errors: paperResults.errors,
+            });
+          }
+        } else {
+          log('warn', 'Paper engine failed', {
+            error: paperResults.error,
+            errors: paperResults.errors,
+          });
+        }
+      } catch (paperError) {
+        log('error', 'Paper engine error', {
+          error: paperError.message,
+        });
+        // Continue - don't crash worker on paper errors
+      }
+
       // TODO: FASE 7 - Add live execution here
 
       // Wait for next iteration

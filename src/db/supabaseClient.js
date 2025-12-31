@@ -352,6 +352,97 @@ export async function getLatestCandles({ symbol, timeframeMin, limit = 500 }) {
   }
 }
 
+/**
+ * Get next candle after a timestamp
+ * 
+ * @param {object} options
+ * @param {string} options.symbol
+ * @param {number} options.timeframeMin
+ * @param {string|Date} options.afterTs - ISO string or Date
+ * @returns {Promise<object|null>} Next candle or null
+ */
+export async function getNextCandle({ symbol, timeframeMin = 1, afterTs }) {
+  if (!isSupabaseConfigured()) {
+    return null;
+  }
+
+  try {
+    const afterTsIso = afterTs instanceof Date ? afterTs.toISOString() : afterTs;
+    const result = await supabaseRequest('GET', 'candles', null, {
+      filters: {
+        symbol: `eq.${symbol}`,
+        timeframe_min: `eq.${timeframeMin}`,
+        ts: `gt.${afterTsIso}`,
+      },
+      order: 'ts.asc',
+      limit: 1,
+      select: '*',
+    });
+    return result && result.length > 0 ? result[0] : null;
+  } catch (error) {
+    console.error('[supabase] Failed to get next candle:', error);
+    return null;
+  }
+}
+
+/**
+ * Get candles between two timestamps
+ * 
+ * @param {object} options
+ * @param {string} options.symbol
+ * @param {number} options.timeframeMin
+ * @param {string|Date} options.startTs - ISO string or Date
+ * @param {string|Date} options.endTs - ISO string or Date
+ * @param {number} options.limit - Max candles to return
+ * @returns {Promise<Array>} Array of candles
+ */
+export async function getCandlesBetween({ symbol, timeframeMin = 1, startTs, endTs, limit = 1000 }) {
+  if (!isSupabaseConfigured()) {
+    return [];
+  }
+
+  try {
+    const startTsIso = startTs instanceof Date ? startTs.toISOString() : startTs;
+    const endTsIso = endTs instanceof Date ? endTs.toISOString() : endTs;
+    
+    const client = getSupabaseClient();
+    // Build URL with filters - Supabase uses & for multiple filters
+    const url = `${client.url}/rest/v1/candles?symbol=eq.${symbol}&timeframe_min=eq.${timeframeMin}&ts=gte.${startTsIso}&ts=lte.${endTsIso}&order=ts.asc&limit=${limit}`;
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'apikey': client.key,
+        'Authorization': `Bearer ${client.key}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[supabase] Failed to get candles between: ${response.status} ${errorText}`);
+      return [];
+    }
+    
+    const result = await response.json();
+    
+    // Filter manually to ensure we're within range (in case of timezone issues)
+    if (result && result.length > 0) {
+      const start = new Date(startTsIso);
+      const end = new Date(endTsIso);
+      return result.filter(c => {
+        const candleTs = new Date(c.ts);
+        return candleTs >= start && candleTs <= end;
+      });
+    }
+    
+    return result || [];
+  } catch (error) {
+    console.error('[supabase] Failed to get candles between:', error);
+    return [];
+  }
+}
+
 // ============================================================================
 // TIMEFRAME_STATE OPERATIONS
 // ============================================================================
@@ -473,6 +564,55 @@ export async function updateTradeProposal(proposalId, updateData) {
     return result[0] || null;
   } catch (error) {
     console.error('[supabase] Failed to update trade proposal:', error);
+    throw error;
+  }
+}
+
+// ============================================================================
+// PAPER STATS OPERATIONS
+// ============================================================================
+
+/**
+ * Insert or upsert daily stats
+ * 
+ * @param {Array} statsRows - Array of daily stat objects
+ * @returns {Promise<Array>} Upserted stats
+ */
+export async function insertOrUpsertDailyStats(statsRows) {
+  if (!isSupabaseConfigured()) {
+    throw new Error('Supabase not configured');
+  }
+
+  if (!statsRows || statsRows.length === 0) {
+    return [];
+  }
+
+  try {
+    const client = getSupabaseClient();
+    const url = `${client.url}/rest/v1/paper_stats_daily?on_conflict=symbol,date`;
+    
+    const headers = {
+      'apikey': client.key,
+      'Authorization': `Bearer ${client.key}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=representation,resolution=merge-duplicates',
+    };
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(statsRows),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Supabase API error: ${response.status} ${errorText.substring(0, 200)}`);
+    }
+
+    const data = await response.json();
+    return Array.isArray(data) ? data : [data];
+  } catch (error) {
+    console.error('[supabase] Failed to upsert daily stats:', error);
     throw error;
   }
 }

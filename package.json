@@ -8,7 +8,7 @@
     "start": "node worker.mjs",
     "dev": "node worker.mjs",
     "test": "echo \"No tests yet\"",
-    "lint:syntax": "node --check worker.mjs && node --check src/ingest/marketDataIngest.mjs && node --check src/exchanges/deribitClient.mjs && node --check src/analysis/stateBuilder.mjs && node --check src/analysis/stateRunner.mjs && node --check src/strategy/strategyEvaluator.mjs && node --check src/strategy/proposalWriter.mjs",
+    "lint:syntax": "node --check worker.mjs && node --check src/ingest/marketDataIngest.mjs && node --check src/exchanges/deribitClient.mjs && node --check src/analysis/stateBuilder.mjs && node --check src/analysis/stateRunner.mjs && node --check src/strategy/strategyEvaluator.mjs && node --check src/strategy/proposalWriter.mjs && node --check src/paper/paperEngine.mjs && node --check src/paper/paperExecutor.mjs && node --check src/paper/paperMonitor.mjs && node --check src/paper/statsCalculator.mjs",
     "check:syntax": "npm run lint:syntax"
   },
   "keywords": [

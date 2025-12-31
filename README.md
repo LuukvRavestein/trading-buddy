@@ -24,6 +24,7 @@ De bot bestaat uit 5 lagen:
 7. Je zou moeten zien: "Success. No rows returned"
 8. **Voor State Builder**: Run ook `supabase/migrations/002_update_timeframe_state.sql` om de `timeframe_state` tabel te updaten
 9. **Voor Strategy Evaluator**: Run ook `supabase/migrations/003_update_trade_proposals.sql` om de `trade_proposals` tabel te updaten
+10. **Voor Paper Performance Engine**: Run ook `supabase/migrations/004_paper_performance.sql` om paper trading te activeren
 
 ### 2. Supabase API Keys
 
@@ -86,6 +87,12 @@ TARGET_RR=2.0  # Target risk/reward ratio
 ATR_SL_MULTIPLIER=0.2  # ATR multiplier for stop loss buffer
 PROPOSAL_DUPLICATE_WINDOW_MIN=10  # Minutes to prevent duplicate proposals
 
+# Paper Trading Configuration
+PROPOSAL_TTL_MIN=10  # Minutes before proposal expires
+INTRABAR_TIEBREAK=worst  # 'worst' or 'best' when TP/SL hit in same candle
+PAPER_MAX_LOOKAHEAD_CANDLES=2000  # Max candles to scan for exits
+PAPER_STATS_ENABLED=1  # Enable daily stats calculation (1 or 0)
+
 # Logging
 LOG_LEVEL=info  # debug, info, warn, error
 ```
@@ -132,6 +139,18 @@ LOG_LEVEL=info  # debug, info, warn, error
      "reason": "UP 15m + UP 5m + 1m CHoCH long"
    }
    ```
+7. **Paper Engine logs**: Zoek naar "Paper engine results", bijvoorbeeld:
+   ```json
+   {
+     "timestamp": "2025-01-01T12:00:00.000Z",
+     "level": "info",
+     "message": "Paper engine results",
+     "executed": 1,
+     "closed": 2,
+     "expired": 0,
+     "errors": 0
+   }
+   ```
 
 ### Supabase Tables
 
@@ -139,8 +158,8 @@ LOG_LEVEL=info  # debug, info, warn, error
 2. Check de volgende tabellen:
    - `candles` - Market data (zou moeten groeien elke minuut)
    - `timeframe_state` - Computed state (trend, ATR, swings, BOS/CHoCH)
-   - `trade_proposals` - Generated trade signals (✅ actief - wordt gevuld door strategy evaluator)
-   - `paper_trades` - Simulated trades (nog niet actief)
+   - `trade_proposals` - Generated trade signals + paper execution (✅ actief)
+   - `paper_stats_daily` - Daily performance statistics (✅ actief)
 
 #### Verifiëren dat timeframe_state wordt geüpdatet:
 
@@ -178,6 +197,57 @@ LOG_LEVEL=info  # debug, info, warn, error
    ORDER BY created_at DESC
    LIMIT 10;
    ```
+
+#### Verifiëren dat paper trades worden uitgevoerd en gesloten:
+
+1. Ga naar Supabase → **Table Editor** → `trade_proposals`
+2. Check executed + closed trades:
+   ```sql
+   SELECT 
+     status,
+     direction,
+     entry_fill_price,
+     stop_loss,
+     take_profit,
+     pnl_pct,
+     exit_reason,
+     created_at,
+     entry_fill_ts,
+     exit_ts
+   FROM trade_proposals
+   WHERE symbol = 'BTC-PERPETUAL'
+   ORDER BY created_at DESC
+   LIMIT 50;
+   ```
+3. Je zou moeten zien:
+   - `status` = 'executed' voor open trades
+   - `status` = 'closed_tp' of 'closed_sl' voor gesloten trades
+   - `entry_fill_price` en `entry_fill_ts` voor executed trades
+   - `exit_price`, `exit_ts`, `pnl_pct` voor closed trades
+
+#### Verifiëren daily stats:
+
+1. Ga naar Supabase → **Table Editor** → `paper_stats_daily`
+2. Check daily performance:
+   ```sql
+   SELECT 
+     date,
+     trades,
+     wins,
+     losses,
+     winrate,
+     pnl_pct,
+     expectancy
+   FROM paper_stats_daily
+   WHERE symbol = 'BTC-PERPETUAL'
+   ORDER BY date DESC
+   LIMIT 30;
+   ```
+3. Je zou moeten zien:
+   - `trades` = aantal gesloten trades per dag
+   - `winrate` = percentage winning trades
+   - `pnl_pct` = totale P&L percentage
+   - `expectancy` = gemiddelde P&L per trade
 4. Verifieer:
    - `rr` ≈ 2.0 (risk/reward ratio)
    - `entry_price` tussen `stop_loss` en `take_profit`
@@ -234,7 +304,7 @@ Het project is opgebouwd in fases:
 - ✅ **FASE 3**: Ingest loop (candles → supabase)
 - ✅ **FASE 4**: State builder (trend/ATR/swing/BOS/CHoCH)
 - ✅ **FASE 5**: Strategy evaluator (setup detectie + trade proposals)
-- ⏳ **FASE 6**: Paper trading + validatie
+- ✅ **FASE 6**: Paper performance engine (execution, monitoring, stats)
 - ⏳ **FASE 7**: Live execution
 
 ## 🔒 Security
