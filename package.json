@@ -1,17 +1,23 @@
 {
   "name": "trading-buddy",
-  "version": "0.1.0",
-  "description": "Bitcoin daytrading bot backend for TradingView, Deribit, and Vercel.",
+  "version": "0.2.0",
+  "description": "Autonomous Bitcoin daytrading bot for Deribit and Supabase (cloud-only)",
   "type": "module",
+  "main": "worker.js",
   "scripts": {
-    "dev": "vercel dev",
+    "start": "node worker.js",
+    "dev": "node worker.js",
     "test": "echo \"No tests yet\""
   },
   "keywords": [
-    "vercel",
     "trading",
     "deribit",
-    "tradingview"
-  ]
+    "bitcoin",
+    "daytrading",
+    "bot"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }
 
