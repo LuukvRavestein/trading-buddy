@@ -10,6 +10,7 @@
  * - DERIBIT_ENV (default: 'test')
  */
 
+// ESM module - ensure Node recognizes this as ES module
 const DERIBIT_API_BASE = 'https://www.deribit.com/api/v2';
 const DERIBIT_TESTNET_BASE = 'https://test.deribit.com/api/v2';
 const DERIBIT_HISTORY_BASE = 'https://history.deribit.com/api/v2';
