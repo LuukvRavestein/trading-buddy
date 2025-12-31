@@ -95,6 +95,9 @@ async function getAccessToken() {
  * @param {object} params - Request parameters
  * @returns {Promise<object>} API response
  */
+// JSON-RPC 2.0 request ID counter
+let requestIdCounter = 1;
+
 async function apiRequest(endpoint, params = {}) {
   const baseUrl = getBaseUrl();
   const url = `${baseUrl}${endpoint}`;
@@ -111,9 +114,18 @@ async function apiRequest(endpoint, params = {}) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  // Deribit uses JSON-RPC 2.0 format for some endpoints
-  // Try both formats: direct params and JSON-RPC
-  const requestBody = JSON.stringify(params);
+  // Deribit uses JSON-RPC 2.0 format for all API calls
+  // Convert endpoint to method name (remove leading slash)
+  const method = endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
+  
+  const jsonRpcRequest = {
+    jsonrpc: '2.0',
+    method: method,
+    params: params,
+    id: requestIdCounter++,
+  };
+
+  const requestBody = JSON.stringify(jsonRpcRequest);
 
   try {
     const response = await fetch(url, {
@@ -135,10 +147,12 @@ async function apiRequest(endpoint, params = {}) {
       throw new Error(`Invalid JSON response from Deribit: ${text.substring(0, 200)}`);
     }
 
-    if (!response.ok || data.error) {
+    // JSON-RPC 2.0 error handling
+    if (data.error) {
       // Log full error details for debugging
       console.error(`[deribitClient] API error details:`, {
         endpoint,
+        method,
         params,
         requestBody,
         status: response.status,
@@ -150,6 +164,7 @@ async function apiRequest(endpoint, params = {}) {
       throw new Error(`Deribit API error: ${errorMsg}`);
     }
 
+    // JSON-RPC 2.0 success response contains result
     return data.result || data;
   } catch (error) {
     console.error(`[deribitClient] API request error (${endpoint}):`, error);
