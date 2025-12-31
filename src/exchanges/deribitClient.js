@@ -243,7 +243,13 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
     }
 
     if (!result.ticks || result.ticks.length === 0) {
-      console.warn('[deribitClient] No ticks in result:', { result });
+      // Log warning only if status is not 'no_data' (which is expected for testnet)
+      if (result.status !== 'no_data') {
+        console.warn('[deribitClient] No ticks in result:', { result });
+      } else {
+        // "no_data" is normal for testnet or when requesting unavailable periods
+        console.log(`[deribitClient] No data available for period (status: no_data)`);
+      }
       return [];
     }
 

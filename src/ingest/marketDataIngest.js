@@ -53,14 +53,15 @@ async function getLatestCandleTimestamp(symbol, timeframeMin) {
 export async function ingestTimeframe(timeframeMin, backfill = false) {
   try {
     // Determine time range
+    // Use current market time (with buffer for testnet)
     let startTs;
-    let endTs = Date.now();
+    let endTs = getCurrentMarketTime();
 
     if (backfill) {
-      // Backfill: fetch last 500 candles
-      // Calculate start time based on timeframe
+      // Backfill: fetch last 100 candles (reduced from 500 to avoid "no_data")
+      // Deribit testnet may not have extensive historical data
       const candleDurationMs = timeframeMin * 60 * 1000;
-      const backfillDurationMs = 500 * candleDurationMs;
+      const backfillDurationMs = 100 * candleDurationMs;
       startTs = endTs - backfillDurationMs;
     } else {
       // Incremental: fetch from last candle + 1 candle
@@ -69,10 +70,17 @@ export async function ingestTimeframe(timeframeMin, backfill = false) {
         // Start from next candle after latest
         const candleDurationMs = timeframeMin * 60 * 1000;
         startTs = latestTs.getTime() + candleDurationMs;
+        
+        // Don't fetch if start is more than 1 candle in the past (already have latest)
+        // But allow fetching if we're missing recent candles
+        const maxLookback = candleDurationMs * 2; // Allow 2 candles lookback
+        if (startTs < endTs - maxLookback) {
+          startTs = endTs - maxLookback;
+        }
       } else {
-        // No candles yet, fetch last 100 as initial load
+        // No candles yet, fetch last 50 as initial load (reduced from 100)
         const candleDurationMs = timeframeMin * 60 * 1000;
-        startTs = endTs - (100 * candleDurationMs);
+        startTs = endTs - (50 * candleDurationMs);
       }
     }
 
@@ -95,11 +103,14 @@ export async function ingestTimeframe(timeframeMin, backfill = false) {
     });
 
     if (candles.length === 0) {
+      // "no_data" is normal for testnet or when requesting future dates
+      // Don't treat this as an error, just return empty result
       return {
         timeframeMin,
         newCandles: 0,
         skipped: false,
-        reason: 'No candles returned from Deribit',
+        reason: 'No candles returned from Deribit (no_data)',
+        note: 'This is normal for testnet or when data is not available for the requested period',
       };
     }
 
@@ -166,5 +177,19 @@ export async function needsBackfill() {
     // If error, assume we need backfill
     return true;
   }
+}
+
+/**
+ * Get current market time (Deribit server time)
+ * For testnet, we'll use current time minus a small buffer
+ * 
+ * @returns {number} Current timestamp in milliseconds
+ */
+function getCurrentMarketTime() {
+  // Use current time, but for testnet we might need to adjust
+  // Deribit testnet may not have data for "now", so use a few minutes ago
+  const now = Date.now();
+  const bufferMs = 5 * 60 * 1000; // 5 minutes buffer
+  return now - bufferMs;
 }
 
