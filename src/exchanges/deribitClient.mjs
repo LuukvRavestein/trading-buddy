@@ -249,10 +249,21 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
     throw new Error(`Unsupported timeframe: ${timeframeMin} minutes`);
   }
 
-  // Deribit API expects timestamps in SECONDS (not milliseconds)
-  // Convert milliseconds to seconds
-  const startSeconds = Math.floor(startTs / 1000);
-  const endSeconds = Math.floor(endTs / 1000);
+  // Consistent timestamp variables: milliseconds (input) and seconds (for Deribit API)
+  const startMs = Number(startTs);
+  const endMs = Number(endTs);
+  const startSeconds = Math.floor(startMs / 1000);
+  const endSeconds = Math.floor(endMs / 1000);
+
+  // Log derived values for debugging
+  console.log('[deribitClient] Timestamp conversion:', {
+    startMs,
+    endMs,
+    startSeconds,
+    endSeconds,
+    startDate: new Date(startMs).toISOString(),
+    endDate: new Date(endMs).toISOString(),
+  });
 
   // Diagnostic mode: test both milliseconds and seconds on mainnet
   const isMainnet = getDeribitEnv() === 'live';
@@ -272,8 +283,8 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
     // Test with MILLISECONDS (to verify)
     const paramsMillis = {
       instrument_name: symbol,
-      start_timestamp: startTs,
-      end_timestamp: endTs,
+      start_timestamp: startMs,
+      end_timestamp: endMs,
       resolution,
     };
 
@@ -285,10 +296,10 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
     });
 
     console.log('[deribitClient] Testing with MILLISECONDS:', {
-      start_timestamp: startTs,
-      end_timestamp: endTs,
-      startDate: new Date(startTs).toISOString(),
-      endDate: new Date(endTs).toISOString(),
+      start_timestamp: startMs,
+      end_timestamp: endMs,
+      startDate: new Date(startMs).toISOString(),
+      endDate: new Date(endMs).toISOString(),
     });
 
     // Test seconds first
@@ -344,10 +355,12 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
     symbol,
     timeframeMin,
     resolution,
+    startMs,
+    endMs,
     startSeconds,
     endSeconds,
-    startDate: new Date(startTs).toISOString(),
-    endDate: new Date(endTs).toISOString(),
+    startDate: new Date(startMs).toISOString(),
+    endDate: new Date(endMs).toISOString(),
   });
 
   try {
