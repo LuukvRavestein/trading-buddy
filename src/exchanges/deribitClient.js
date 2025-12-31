@@ -235,12 +235,19 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
       endDate: new Date(endTs).toISOString(),
     });
 
-    // Try different possible endpoint names
-    // Deribit mainnet might use a different method name than testnet
+    // Try different possible endpoint names and method name formats
+    // Deribit mainnet might use different naming conventions
     const possibleEndpoints = [
       '/public/get_tradingview_chart_data',
       '/public/get_chart_data',
       '/public/tradingview_chart_data',
+    ];
+    
+    // Also try method name variants (with dots instead of slashes for JSON-RPC)
+    const methodVariants = [
+      null, // Use endpoint as-is (with slash converted to method)
+      'public.get_tradingview_chart_data',
+      'public.get_chart_data',
     ];
 
     let lastError = null;
