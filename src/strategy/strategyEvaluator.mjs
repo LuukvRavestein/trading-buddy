@@ -11,7 +11,7 @@ import { getLatestCandles } from '../db/supabaseClient.js';
 const MIN_RISK_PCT = parseFloat(process.env.MIN_RISK_PCT || '0.1', 10) / 100; // 0.1% minimum
 const TARGET_RR = parseFloat(process.env.TARGET_RR || '2.0', 10); // 2.0 risk/reward
 const ATR_SL_MULTIPLIER = parseFloat(process.env.ATR_SL_MULTIPLIER || '0.2', 10); // 0.2 × ATR for SL buffer
-const MAX_STATE_AGE_MS = 2 * 60 * 1000; // 2 minutes max age for state
+const STRATEGY_DEBUG = process.env.STRATEGY_DEBUG === '1';
 
 /**
  * Evaluate strategy and return proposal if valid setup
@@ -30,22 +30,48 @@ export async function evaluateStrategy({ symbol }) {
     ]);
     
     // Validate data freshness
-    const now = Date.now();
+    const nowMs = Date.now();
+    const nowIso = new Date(nowMs).toISOString();
     const states = [
-      { tf: '1m', state: state1m },
-      { tf: '5m', state: state5m },
-      { tf: '15m', state: state15m },
+      { tf: '1m', timeframeMin: 1, state: state1m },
+      { tf: '5m', timeframeMin: 5, state: state5m },
+      { tf: '15m', timeframeMin: 15, state: state15m },
     ];
     
-    for (const { tf, state } of states) {
+    for (const { tf, timeframeMin, state } of states) {
       if (!state || !state.ts) {
         console.log(`[strategy] Missing ${tf} state`);
         return null;
       }
       
-      const stateAge = now - new Date(state.ts).getTime();
-      if (stateAge > MAX_STATE_AGE_MS) {
-        console.log(`[strategy] ${tf} state too old: ${stateAge}ms`);
+      // Use Date.parse() to convert ISO string to milliseconds
+      const tsMs = Date.parse(state.ts);
+      
+      // Handle NaN from Date.parse
+      if (isNaN(tsMs)) {
+        console.error(`[strategy] Invalid timestamp in ${tf} state: ${state.ts}`);
+        return null;
+      }
+      
+      // Dynamic threshold: 2 candles + 30s buffer
+      const thresholdMs = (timeframeMin * 60_000 * 2) + 30_000;
+      const ageMs = nowMs - tsMs;
+      
+      // Debug logging
+      if (STRATEGY_DEBUG) {
+        console.log(`[strategy] 🔍 DEBUG ${tf} freshness:`, {
+          nowIso,
+          stateTs: state.ts,
+          tsMs,
+          nowMs,
+          ageMs,
+          thresholdMs,
+          isFresh: ageMs <= thresholdMs,
+        });
+      }
+      
+      if (ageMs > thresholdMs) {
+        console.log(`[strategy] ${tf} state too old: ${ageMs}ms (threshold: ${thresholdMs}ms)`);
         return null;
       }
     }
