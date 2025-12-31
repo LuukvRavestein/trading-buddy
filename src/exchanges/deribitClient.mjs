@@ -249,29 +249,109 @@ export async function getCandles({ symbol, timeframeMin, startTs, endTs }) {
     throw new Error(`Unsupported timeframe: ${timeframeMin} minutes`);
   }
 
-  try {
-    // Deribit API expects specific parameter format
-    // Try the standard format first
-    const params = {
+  // Deribit API expects timestamps in SECONDS (not milliseconds)
+  // Convert milliseconds to seconds
+  const startSeconds = Math.floor(startTs / 1000);
+  const endSeconds = Math.floor(endTs / 1000);
+
+  // Diagnostic mode: test both milliseconds and seconds on mainnet
+  const isMainnet = getDeribitEnv() === 'live';
+  const enableDiagnostics = process.env.DERIBIT_DIAGNOSTIC_MODE === 'true' && isMainnet;
+
+  if (enableDiagnostics) {
+    console.log('[deribitClient] 🔍 DIAGNOSTIC MODE: Testing both timestamp units');
+    
+    // Test with SECONDS (Deribit standard)
+    const paramsSeconds = {
       instrument_name: symbol,
       start_timestamp: startSeconds,
       end_timestamp: endSeconds,
       resolution,
     };
-
-    console.log(`[deribitClient] Fetching candles:`, {
-      symbol,
-      timeframeMin,
+    
+    // Test with MILLISECONDS (to verify)
+    const paramsMillis = {
+      instrument_name: symbol,
+      start_timestamp: startTs,
+      end_timestamp: endTs,
       resolution,
-      startSeconds,
-      endSeconds,
+    };
+
+    console.log('[deribitClient] Testing with SECONDS:', {
+      start_timestamp: startSeconds,
+      end_timestamp: endSeconds,
+      startDate: new Date(startSeconds * 1000).toISOString(),
+      endDate: new Date(endSeconds * 1000).toISOString(),
+    });
+
+    console.log('[deribitClient] Testing with MILLISECONDS:', {
+      start_timestamp: startTs,
+      end_timestamp: endTs,
       startDate: new Date(startTs).toISOString(),
       endDate: new Date(endTs).toISOString(),
     });
 
+    // Test seconds first
+    try {
+      const resultSeconds = await apiRequest('/public/get_tradingview_chart_data', paramsSeconds);
+      console.log('[deribitClient] ✅ SECONDS result:', {
+        status: resultSeconds.status,
+        ticksCount: resultSeconds.ticks?.length || 0,
+        firstTick: resultSeconds.ticks?.[0] ? new Date(resultSeconds.ticks[0] * 1000).toISOString() : null,
+        lastTick: resultSeconds.ticks?.[resultSeconds.ticks?.length - 1] ? new Date(resultSeconds.ticks[resultSeconds.ticks.length - 1] * 1000).toISOString() : null,
+        responseKeys: Object.keys(resultSeconds),
+      });
+      
+      if (resultSeconds.ticks && resultSeconds.ticks.length > 0) {
+        console.log('[deribitClient] ✅ SECONDS works! Using seconds for timestamps');
+        return processCandleResult(resultSeconds);
+      }
+    } catch (error) {
+      console.log('[deribitClient] ❌ SECONDS failed:', error.message);
+    }
+
+    // Test milliseconds
+    try {
+      const resultMillis = await apiRequest('/public/get_tradingview_chart_data', paramsMillis);
+      console.log('[deribitClient] ✅ MILLISECONDS result:', {
+        status: resultMillis.status,
+        ticksCount: resultMillis.ticks?.length || 0,
+        firstTick: resultMillis.ticks?.[0] ? new Date(resultMillis.ticks[0] * 1000).toISOString() : null,
+        lastTick: resultMillis.ticks?.[resultMillis.ticks?.length - 1] ? new Date(resultMillis.ticks[resultMillis.ticks.length - 1] * 1000).toISOString() : null,
+        responseKeys: Object.keys(resultMillis),
+      });
+      
+      if (resultMillis.ticks && resultMillis.ticks.length > 0) {
+        console.log('[deribitClient] ✅ MILLISECONDS works! Using milliseconds for timestamps');
+        return processCandleResult(resultMillis);
+      }
+    } catch (error) {
+      console.log('[deribitClient] ❌ MILLISECONDS failed:', error.message);
+    }
+
+    console.log('[deribitClient] ⚠️  Both timestamp units failed or returned no data');
+  }
+
+  // Standard params (use seconds - Deribit API standard)
+  const params = {
+    instrument_name: symbol,
+    start_timestamp: startSeconds,
+    end_timestamp: endSeconds,
+    resolution,
+  };
+
+  console.log(`[deribitClient] Fetching candles:`, {
+    symbol,
+    timeframeMin,
+    resolution,
+    startSeconds,
+    endSeconds,
+    startDate: new Date(startTs).toISOString(),
+    endDate: new Date(endTs).toISOString(),
+  });
+
+  try {
     // Try mainnet endpoints first
-    const isMainnet = getDeribitEnv() === 'live';
-    
     if (isMainnet) {
       // Step 1: Test if API is accessible
       try {
