@@ -117,61 +117,88 @@ async function apiRequest(endpoint, params = {}) {
 
   // Deribit uses JSON-RPC 2.0 format for all API calls
   // Convert endpoint to method name (remove leading slash)
-  const method = endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
+  // Try both slash and dot notation for method name
+  let method = endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
   
-  const jsonRpcRequest = {
-    jsonrpc: '2.0',
-    method: method,
-    params: params,
-    id: requestIdCounter++,
-  };
-
-  const requestBody = JSON.stringify(jsonRpcRequest);
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: requestBody,
-    });
-
-    let data;
+  // Try method name with dots instead of slashes (some Deribit endpoints use dots)
+  const methodVariants = [
+    method, // Original: public/get_tradingview_chart_data
+    method.replace(/\//g, '.'), // With dots: public.get_tradingview_chart_data
+  ];
+  
+  let lastError = null;
+  let jsonRpcRequest = null;
+  
+  // Try both method name formats
+  for (const methodName of methodVariants) {
+    jsonRpcRequest = {
+      jsonrpc: '2.0',
+      method: methodName,
+      params: params,
+      id: requestIdCounter++,
+    };
+    
+    const requestBody = JSON.stringify(jsonRpcRequest);
+    
     try {
-      data = await response.json();
-    } catch (jsonError) {
-      const text = await response.text();
-      console.error(`[deribitClient] Failed to parse JSON response:`, {
-        endpoint,
-        status: response.status,
-        responseText: text.substring(0, 500),
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: requestBody,
       });
-      throw new Error(`Invalid JSON response from Deribit: ${text.substring(0, 200)}`);
-    }
 
-    // JSON-RPC 2.0 error handling
-    if (data.error) {
-      // Log full error details for debugging
-      console.error(`[deribitClient] API error details:`, {
-        endpoint,
-        method,
-        params,
-        requestBody,
-        status: response.status,
-        error: data.error,
-        fullResponse: JSON.stringify(data).substring(0, 1000),
-      });
-      
-      const errorMsg = data.error?.message || JSON.stringify(data.error) || `HTTP ${response.status}`;
-      throw new Error(`Deribit API error: ${errorMsg}`);
-    }
+      let data;
+      try {
+        data = await response.json();
+      } catch (jsonError) {
+        const text = await response.text();
+        console.error(`[deribitClient] Failed to parse JSON response:`, {
+          endpoint,
+          status: response.status,
+          responseText: text.substring(0, 500),
+        });
+        throw new Error(`Invalid JSON response from Deribit: ${text.substring(0, 200)}`);
+      }
 
-    // JSON-RPC 2.0 success response contains result
-    return data.result || data;
-  } catch (error) {
-    console.error(`[deribitClient] API request error (${endpoint}):`, error);
-    throw error;
+      // JSON-RPC 2.0 error handling
+      if (data.error) {
+        // If "Method not found", try next method variant
+        if (data.error.code === -32601 || data.error.message?.includes('Method not found')) {
+          lastError = new Error(`Deribit API error: ${data.error.message || JSON.stringify(data.error)}`);
+          continue; // Try next method variant
+        }
+        
+        // For other errors, log and throw immediately
+        console.error(`[deribitClient] API error details:`, {
+          endpoint,
+          method: methodName,
+          params,
+          requestBody,
+          status: response.status,
+          error: data.error,
+          fullResponse: JSON.stringify(data).substring(0, 1000),
+        });
+        
+        const errorMsg = data.error?.message || JSON.stringify(data.error) || `HTTP ${response.status}`;
+        throw new Error(`Deribit API error: ${errorMsg}`);
+      }
+
+      // Success - return result
+      return data.result || data;
+    } catch (error) {
+      // If it's "Method not found", try next variant
+      if (error.message.includes('Method not found') || error.message.includes('-32601')) {
+        lastError = error;
+        continue;
+      }
+      // For other errors, throw immediately
+      throw error;
+    }
   }
-}
+  
+  // If all method variants failed, throw last error
+  throw lastError || new Error(`Deribit API error: All method name variants failed for ${endpoint}`);
+
 
 /**
  * Get candles from Deribit
