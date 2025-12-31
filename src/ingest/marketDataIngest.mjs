@@ -66,23 +66,37 @@ export async function ingestTimeframe(timeframeMin, backfill = false) {
       const backfillDurationMs = 100 * candleDurationMs;
       startTs = endTs - backfillDurationMs;
     } else {
-      // Incremental: fetch from last candle + 1 candle
+      // Incremental: fetch from last candle minus overlap
       const latestTs = await getLatestCandleTimestamp(SYMBOL, timeframeMin);
       if (latestTs) {
-        // Start from next candle after latest
-        const candleDurationMs = timeframeMin * 60 * 1000;
-        startTs = latestTs.getTime() + candleDurationMs;
+        // Start from last candle timestamp minus overlap
+        // This ensures we have enough data for aggregation and catch any gaps
+        const overlapMs = getOverlapDuration(timeframeMin);
+        startTs = latestTs.getTime() - overlapMs;
         
-        // Don't fetch if start is more than 1 candle in the past (already have latest)
-        // But allow fetching if we're missing recent candles
-        const maxLookback = candleDurationMs * 2; // Allow 2 candles lookback
-        if (startTs < endTs - maxLookback) {
-          startTs = endTs - maxLookback;
+        // Ensure start is not before a reasonable point (e.g., 7 days ago)
+        const maxHistoryMs = 7 * 24 * 60 * 60 * 1000; // 7 days
+        const minStartTs = endTs - maxHistoryMs;
+        if (startTs < minStartTs) {
+          startTs = minStartTs;
         }
+        
+        console.log(`[ingest] Incremental fetch for ${timeframeMin}m:`, {
+          latestTs: latestTs.toISOString(),
+          overlapMinutes: overlapMs / (60 * 1000),
+          startTs: new Date(startTs).toISOString(),
+          endTs: new Date(endTs).toISOString(),
+          windowHours: (endTs - startTs) / (60 * 60 * 1000),
+        });
       } else {
-        // No candles yet, fetch last 50 as initial load (reduced from 100)
+        // No candles yet, use backfill default (last 50 candles)
         const candleDurationMs = timeframeMin * 60 * 1000;
         startTs = endTs - (50 * candleDurationMs);
+        console.log(`[ingest] Initial fetch for ${timeframeMin}m (no existing candles):`, {
+          startTs: new Date(startTs).toISOString(),
+          endTs: new Date(endTs).toISOString(),
+          candles: 50,
+        });
       }
     }
 
@@ -259,15 +273,32 @@ export async function initializeWebSocketFallback() {
 
 /**
  * Get current market time (Deribit server time)
- * For testnet, we'll use current time minus a small buffer
+ * Returns current time minus 15 seconds to avoid partial candles
  * 
  * @returns {number} Current timestamp in milliseconds
  */
 function getCurrentMarketTime() {
-  // Use current time, but for testnet we might need to adjust
-  // Deribit testnet may not have data for "now", so use a few minutes ago
   const now = Date.now();
-  const bufferMs = 5 * 60 * 1000; // 5 minutes buffer
+  const bufferMs = 15 * 1000; // 15 seconds buffer to avoid partial candle
   return now - bufferMs;
+}
+
+/**
+ * Get overlap duration for incremental ingest based on timeframe
+ * Higher timeframes need more overlap because they aggregate from lower timeframes
+ * 
+ * @param {number} timeframeMin - Timeframe in minutes
+ * @returns {number} Overlap duration in milliseconds
+ */
+function getOverlapDuration(timeframeMin) {
+  const overlapMap = {
+    1: 5 * 60 * 1000,      // 1m: 5 minutes overlap
+    5: 30 * 60 * 1000,     // 5m: 30 minutes overlap
+    15: 2 * 60 * 60 * 1000, // 15m: 2 hours overlap
+    60: 12 * 60 * 60 * 1000, // 60m: 12 hours overlap
+  };
+  
+  // Default to 1 hour if timeframe not in map
+  return overlapMap[timeframeMin] || 60 * 60 * 1000;
 }
 
