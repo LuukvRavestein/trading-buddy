@@ -460,6 +460,17 @@ export async function upsertTimeframeState(state) {
   }
 
   try {
+    // Ensure timeframe_min is integer
+    const stateToUpsert = {
+      ...state,
+      timeframe_min: parseInt(state.timeframe_min, 10),
+    };
+    
+    // Verify required fields
+    if (!stateToUpsert.symbol || !stateToUpsert.timeframe_min || !stateToUpsert.ts) {
+      throw new Error(`Missing required fields: symbol=${stateToUpsert.symbol}, timeframe_min=${stateToUpsert.timeframe_min}, ts=${stateToUpsert.ts}`);
+    }
+    
     const client = getSupabaseClient();
     const url = `${client.url}/rest/v1/timeframe_state?on_conflict=symbol,timeframe_min,ts`;
     
@@ -473,16 +484,30 @@ export async function upsertTimeframeState(state) {
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(state),
+      body: JSON.stringify(stateToUpsert),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
+      console.error(`[supabase] Upsert failed for state:`, {
+        symbol: stateToUpsert.symbol,
+        timeframe_min: stateToUpsert.timeframe_min,
+        ts: stateToUpsert.ts,
+        error: errorText.substring(0, 500),
+      });
       throw new Error(`Supabase API error: ${response.status} ${errorText.substring(0, 200)}`);
     }
 
     const data = await response.json();
-    return Array.isArray(data) ? data[0] : data;
+    const result = Array.isArray(data) ? data[0] : data;
+    
+    console.log(`[supabase] ✅ Upserted timeframe_state:`, {
+      symbol: result.symbol,
+      timeframe_min: result.timeframe_min,
+      ts: result.ts,
+    });
+    
+    return result;
   } catch (error) {
     console.error('[supabase] Failed to upsert timeframe state:', error);
     throw error;
