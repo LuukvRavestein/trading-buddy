@@ -39,6 +39,19 @@ export async function runBacktest({ symbol, startTs, endTs, config }) {
     
     console.log(`[backtest] Loading candles from ${lookbackStart} to ${endTs}`);
     
+    // Calculate expected counts for validation
+    const startMs = new Date(lookbackStart).getTime();
+    const endMs = new Date(endTs).getTime();
+    const minutesBetween = (endMs - startMs) / (60 * 1000);
+    const expectedCounts = {
+      1: Math.floor(minutesBetween / 1),
+      5: Math.floor(minutesBetween / 5),
+      15: Math.floor(minutesBetween / 15),
+      60: Math.floor(minutesBetween / 60),
+    };
+    
+    console.log(`[backtest] Expected candle counts: 1m≈${expectedCounts[1]}, 5m≈${expectedCounts[5]}, 15m≈${expectedCounts[15]}, 60m≈${expectedCounts[60]}`);
+    
     const [candles1m, candles5m, candles15m, candles60m] = await Promise.all([
       getCandlesInRange({ symbol, timeframeMin: 1, startTs: lookbackStart, endTs }),
       getCandlesInRange({ symbol, timeframeMin: 5, startTs: lookbackStart, endTs }),
@@ -46,7 +59,18 @@ export async function runBacktest({ symbol, startTs, endTs, config }) {
       getCandlesInRange({ symbol, timeframeMin: 60, startTs: lookbackStart, endTs }),
     ]);
     
-    console.log(`[backtest] Loaded candles: 1m=${candles1m.length}, 5m=${candles5m.length}, 15m=${candles15m.length}, 60m=${candles60m.length}`);
+    console.log(`[backtest] Loaded candles: 1m=${candles1m.length} (expected ~${expectedCounts[1]}), 5m=${candles5m.length} (expected ~${expectedCounts[5]}), 15m=${candles15m.length} (expected ~${expectedCounts[15]}), 60m=${candles60m.length} (expected ~${expectedCounts[60]})`);
+    
+    // Warn if counts are suspiciously low
+    const checkCount = (actual, expected, tf) => {
+      if (actual < expected * 0.5) {
+        console.warn(`[backtest] ⚠️  Suspiciously low ${tf}m candle count: got ${actual}, expected ~${expected} (${((actual/expected)*100).toFixed(1)}%)`);
+      }
+    };
+    checkCount(candles1m.length, expectedCounts[1], 1);
+    checkCount(candles5m.length, expectedCounts[5], 5);
+    checkCount(candles15m.length, expectedCounts[15], 15);
+    checkCount(candles60m.length, expectedCounts[60], 60);
     
     if (candles1m.length === 0) {
       throw new Error('No 1m candles available for backtest period');
