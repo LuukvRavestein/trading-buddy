@@ -93,12 +93,30 @@ export async function evaluateStrategy({ symbol, nowMs, nowIso }) {
     }
     
     // Step 1: Direction filter (HTF context)
-    // Long only if: 15m trend == "up" AND 5m trend == "up"
-    // Short only if: 15m trend == "down" AND 5m trend == "down"
-    const direction = determineDirection(state5m, state15m);
-    if (!direction) {
-      console.log('[strategy] No valid direction: HTF trends do not align');
+    // Use 15m as primary trend, allow if 5m is same/chop/null, block only if 5m is opposite
+    const directionResult = determineDirection(state5m, state15m);
+    if (!directionResult.direction) {
+      console.log(`[strategy] No valid direction: ${directionResult.reason}`);
+      if (STRATEGY_DEBUG) {
+        console.log(`[strategy] 🔍 DEBUG HTF direction:`, {
+          trend15m: state15m.trend,
+          trend5m: state5m.trend,
+          chosenDirection: directionResult.direction,
+          blockedReason: directionResult.reason,
+        });
+      }
       return null;
+    }
+    
+    const direction = directionResult.direction;
+    
+    if (STRATEGY_DEBUG) {
+      console.log(`[strategy] 🔍 DEBUG HTF direction:`, {
+        trend15m: state15m.trend,
+        trend5m: state5m.trend,
+        chosenDirection: direction,
+        blockedReason: null,
+      });
     }
     
     // Step 2: Get latest 1m candle for entry price and trigger check
@@ -209,24 +227,66 @@ export async function evaluateStrategy({ symbol, nowMs, nowIso }) {
 }
 
 /**
- * Determine direction based on HTF trends
+ * Determine direction based on HTF trends (tolerant logic)
+ * 
+ * Rules:
+ * - Use 15m trend as primaryTrend
+ * - If primaryTrend is 'up' or 'down':
+ *   - Allow that direction if 5m is same OR 'chop' OR null/undefined
+ *   - Block ONLY if 5m is the opposite direction
+ * - If primaryTrend is 'chop' or null => no trade
  * 
  * @param {object} state5m - 5m timeframe state
  * @param {object} state15m - 15m timeframe state
- * @returns {string|null} 'long', 'short', or null
+ * @returns {object} { direction: 'long'|'short'|null, reason: string }
  */
 function determineDirection(state5m, state15m) {
-  // Long only if: 15m trend == "up" AND 5m trend == "up"
-  if (state15m.trend === 'up' && state5m.trend === 'up') {
-    return 'long';
+  const primaryTrend = state15m?.trend;
+  const trend5m = state5m?.trend;
+  
+  // If primary trend is not clear (chop/null), no trade
+  if (!primaryTrend || primaryTrend === 'chop') {
+    return {
+      direction: null,
+      reason: `15m trend is ${primaryTrend || 'null'} (not clear)`,
+    };
   }
   
-  // Short only if: 15m trend == "down" AND 5m trend == "down"
-  if (state15m.trend === 'down' && state5m.trend === 'down') {
-    return 'short';
+  // If primary trend is 'up', allow long unless 5m is explicitly 'down'
+  if (primaryTrend === 'up') {
+    if (trend5m === 'down') {
+      return {
+        direction: null,
+        reason: '15m is up but 5m is down (opposite)',
+      };
+    }
+    // Allow if 5m is 'up', 'chop', null, or undefined
+    return {
+      direction: 'long',
+      reason: `15m is up, 5m is ${trend5m || 'null'} (allowed)`,
+    };
   }
   
-  return null;
+  // If primary trend is 'down', allow short unless 5m is explicitly 'up'
+  if (primaryTrend === 'down') {
+    if (trend5m === 'up') {
+      return {
+        direction: null,
+        reason: '15m is down but 5m is up (opposite)',
+      };
+    }
+    // Allow if 5m is 'down', 'chop', null, or undefined
+    return {
+      direction: 'short',
+      reason: `15m is down, 5m is ${trend5m || 'null'} (allowed)`,
+    };
+  }
+  
+  // Fallback (should not reach here)
+  return {
+    direction: null,
+    reason: `Unknown primary trend: ${primaryTrend}`,
+  };
 }
 
 /**
