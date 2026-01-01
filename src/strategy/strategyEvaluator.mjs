@@ -31,11 +31,22 @@ export async function evaluateStrategy({ symbol, nowMs, nowIso }) {
     }
     
     // Fetch latest timeframe_state for 1m, 5m, 15m
+    // Always orders by ts descending to get most recent state
     const [state1m, state5m, state15m] = await Promise.all([
       getLatestTimeframeState({ symbol, timeframeMin: 1 }),
       getLatestTimeframeState({ symbol, timeframeMin: 5 }),
       getLatestTimeframeState({ symbol, timeframeMin: 15 }),
     ]);
+    
+    // Debug logging: log fetched state timestamps
+    if (STRATEGY_DEBUG) {
+      console.log('[strategy] 🔍 DEBUG: Fetched state timestamps:', {
+        '1m': state1m?.ts || 'null',
+        '5m': state5m?.ts || 'null',
+        '15m': state15m?.ts || 'null',
+        nowIso: nowIso || new Date(nowMs).toISOString(),
+      });
+    }
     
     // Validate data freshness using consistent nowMs
     const states = [

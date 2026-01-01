@@ -516,6 +516,7 @@ export async function upsertTimeframeState(state) {
 
 /**
  * Get latest timeframe state
+ * ALWAYS orders by ts descending to get the most recent state
  * 
  * @param {object} options
  * @param {string} options.symbol
@@ -528,16 +529,27 @@ export async function getLatestTimeframeState({ symbol, timeframeMin }) {
   }
 
   try {
-    const result = await supabaseRequest('GET', 'timeframe_state', null, {
-      filters: {
-        symbol: `eq.${symbol}`,
-        timeframe_min: `eq.${timeframeMin}`,
+    const client = getSupabaseClient();
+    // Query with explicit ordering by ts descending (NOT created_at)
+    const url = `${client.url}/rest/v1/timeframe_state?symbol=eq.${symbol}&timeframe_min=eq.${timeframeMin}&order=ts.desc&limit=1&select=*`;
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'apikey': client.key,
+        'Authorization': `Bearer ${client.key}`,
+        'Content-Type': 'application/json',
       },
-      order: 'ts.desc',
-      limit: 1,
-      select: '*',
     });
-    return result && result.length > 0 ? result[0] : null;
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[supabase] Failed to get latest timeframe state: ${response.status} ${errorText}`);
+      return null;
+    }
+
+    const data = await response.json();
+    return data && data.length > 0 ? data[0] : null;
   } catch (error) {
     console.error('[supabase] Failed to get timeframe state:', error);
     return null;
