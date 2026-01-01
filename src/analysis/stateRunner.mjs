@@ -70,7 +70,7 @@ export async function runStateUpdateForTimeframe({ symbol, timeframeMin }) {
       startTs = lastStateTs.getTime() - (STATE_LOOKBACK * timeframeMin * 60 * 1000);
     }
     
-    // Fetch candles
+    // Fetch candles (ordered desc - newest first)
     const allCandles = await getLatestCandles({
       symbol,
       timeframeMin,
@@ -88,10 +88,25 @@ export async function runStateUpdateForTimeframe({ symbol, timeframeMin }) {
       };
     }
     
-    // Get latest candle ts for reference
-    const latestCandleTs = allCandles[0]?.ts; // First candle is latest (ordered desc)
-    if (latestCandleTs) {
-      console.log(`[stateRunner] ${timeframeMin}m: Latest candle ts in fetched set: ${latestCandleTs}`);
+    // Verify ordering: first candle should be newest (desc order)
+    const firstTs = allCandles[0]?.ts; // Newest (first in desc order)
+    const lastTs = allCandles[allCandles.length - 1]?.ts; // Oldest (last in desc order)
+    
+    if (firstTs) {
+      console.log(`[stateRunner] ${timeframeMin}m: Latest candle ts in fetched set: ${firstTs} (newest)`);
+    }
+    
+    // Debug logging
+    if (STATE_DEBUG) {
+      console.log(`[stateRunner] 🔍 DEBUG ${timeframeMin}m candle fetch:`, {
+        fetchedCount: allCandles.length,
+        firstTs: firstTs || 'null',
+        lastTs: lastTs || 'null',
+        firstTsDate: firstTs ? new Date(firstTs).toISOString() : null,
+        lastTsDate: lastTs ? new Date(lastTs).toISOString() : null,
+        // Verify firstTs matches max ts from DB (should be close)
+        maxTsFromDB: latestCandleTs || 'not queried',
+      });
     }
     
     // Filter to only new candles if we have last state

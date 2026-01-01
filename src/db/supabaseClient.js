@@ -336,16 +336,29 @@ export async function getLatestCandles({ symbol, timeframeMin, limit = 500 }) {
   }
 
   try {
-    const result = await supabaseRequest('GET', 'candles', null, {
-      filters: {
-        symbol: `eq.${symbol}`,
-        timeframe_min: `eq.${timeframeMin}`,
+    const client = getSupabaseClient();
+    // Query with explicit ordering by ts descending (newest first)
+    const url = `${client.url}/rest/v1/candles?symbol=eq.${symbol}&timeframe_min=eq.${timeframeMin}&order=ts.desc&limit=${limit}&select=*`;
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'apikey': client.key,
+        'Authorization': `Bearer ${client.key}`,
+        'Content-Type': 'application/json',
       },
-      order: 'ts.desc',
-      limit: limit,
-      select: '*',
     });
-    return result || [];
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[supabase] Failed to get latest candles: ${response.status} ${errorText}`);
+      return [];
+    }
+
+    const data = await response.json();
+    // Data is already ordered desc (newest first), return as-is
+    // State builder will sort ascending if needed
+    return data || [];
   } catch (error) {
     console.error('[supabase] Failed to get candles:', error);
     return [];
