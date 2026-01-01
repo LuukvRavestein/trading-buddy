@@ -27,6 +27,7 @@ import { evaluateStrategy } from './src/strategy/strategyEvaluator.mjs';
 import { saveProposal } from './src/strategy/proposalWriter.mjs';
 import { runPaperEngine } from './src/paper/paperEngine.mjs';
 import { runOptimizer } from './src/backtest/optimizer.mjs';
+import { runBackfill } from './src/backfill/backfillEngine.mjs';
 
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const POLL_INTERVAL_SECONDS = parseInt(process.env.POLL_INTERVAL_SECONDS || '60', 10);
@@ -337,22 +338,85 @@ async function runBacktestMode() {
   }
 }
 
-// Start worker or backtest mode
+/**
+ * Run backfill mode
+ */
+async function runBackfillMode() {
+  const BACKFILL_MODE = process.env.BACKFILL_MODE === '1';
+  const BACKFILL_SYMBOL = process.env.BACKFILL_SYMBOL || process.env.SYMBOL || 'BTC-PERPETUAL';
+  const BACKFILL_START_TS = process.env.BACKFILL_START_TS;
+  const BACKFILL_END_TS = process.env.BACKFILL_END_TS;
+  const BACKFILL_TIMEFRAMES = (process.env.BACKFILL_TIMEFRAMES || '1,5,15,60').split(',').map(t => parseInt(t.trim(), 10));
+  const BACKFILL_BATCH_LIMIT = parseInt(process.env.BACKFILL_BATCH_LIMIT || '5000', 10);
+  const BACKFILL_OVERLAP_MINUTES = process.env.BACKFILL_OVERLAP_MINUTES ? parseInt(process.env.BACKFILL_OVERLAP_MINUTES, 10) : null;
+  
+  if (!BACKFILL_MODE) {
+    return false; // Not in backfill mode
+  }
+  
+  if (!BACKFILL_START_TS || !BACKFILL_END_TS) {
+    throw new Error('BACKFILL_MODE=1 requires BACKFILL_START_TS and BACKFILL_END_TS environment variables');
+  }
+  
+  log('info', 'Running in BACKFILL_MODE', {
+    symbol: BACKFILL_SYMBOL,
+    startTs: BACKFILL_START_TS,
+    endTs: BACKFILL_END_TS,
+    timeframes: BACKFILL_TIMEFRAMES,
+    batchLimit: BACKFILL_BATCH_LIMIT,
+    overlapMinutes: BACKFILL_OVERLAP_MINUTES,
+  });
+  
+  try {
+    const results = await runBackfill({
+      symbol: BACKFILL_SYMBOL,
+      startTs: BACKFILL_START_TS,
+      endTs: BACKFILL_END_TS,
+      timeframes: BACKFILL_TIMEFRAMES,
+      batchLimit: BACKFILL_BATCH_LIMIT,
+      overlapMinutes: BACKFILL_OVERLAP_MINUTES,
+    });
+    
+    log('info', 'Backfill complete', {
+      results: Object.keys(results).map(tf => {
+        const r = results[tf];
+        return `${tf}m: ${r.totalUpserted} candles`;
+      }).join(', '),
+    });
+    
+    return true; // Backfill mode completed
+  } catch (error) {
+    log('error', 'Backfill failed', {
+      error: error.message,
+      stack: error.stack,
+    });
+    throw error;
+  }
+}
+
+// Start worker, backtest mode, or backfill mode
 (async () => {
   const isBacktestMode = await runBacktestMode();
   
   if (isBacktestMode) {
     log('info', 'Backtest mode complete, exiting');
     process.exit(0);
-  } else {
-    // Run normal worker
-    runWorker().catch((error) => {
-      log('error', 'Fatal error starting worker', {
-        error: error.message,
-        stack: error.stack,
-      });
-      process.exit(1);
-    });
   }
+  
+  const isBackfillMode = await runBackfillMode();
+  
+  if (isBackfillMode) {
+    log('info', 'Backfill mode complete, exiting');
+    process.exit(0);
+  }
+  
+  // Run normal worker
+  runWorker().catch((error) => {
+    log('error', 'Fatal error starting worker', {
+      error: error.message,
+      stack: error.stack,
+    });
+    process.exit(1);
+  });
 })();
 
