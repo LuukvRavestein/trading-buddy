@@ -130,11 +130,11 @@ export async function runBacktest({ symbol, startTs, endTs, config }) {
           if (config.timeout_min > 0) {
             const tradeDurationMin = (candle.t - openTrade.entryTsMs) / (60 * 1000);
             if (tradeDurationMin >= config.timeout_min) {
-              // Timeout exit
-              const exitPrice = candle.c; // Close at current price
-              const trade = closeTrade(openTrade, candleTsIso, exitPrice, 'timeout', config);
-              trades.push(trade);
-              await insertStrategyTrade(trade);
+          // Timeout exit
+          const exitPrice = candle.c; // Close at current price
+          const trade = closeTrade(openTrade, candleTsIso, exitPrice, 'timeout', config, runId, symbol);
+          trades.push(trade);
+          await insertStrategyTrade(trade);
               
               console.log(`[backtest] Trade timeout: ${openTrade.direction} ${openTrade.entryPrice} -> ${exitPrice}`);
               openTrade = null;
@@ -169,7 +169,7 @@ export async function runBacktest({ symbol, startTs, endTs, config }) {
     if (openTrade) {
       const lastCandle = backtestCandles[backtestCandles.length - 1];
       const exitPrice = lastCandle.c;
-      const trade = closeTrade(openTrade, new Date(lastCandle.t).toISOString(), exitPrice, 'timeout', config);
+      const trade = closeTrade(openTrade, new Date(lastCandle.t).toISOString(), exitPrice, 'timeout', config, runId, symbol);
       trades.push(trade);
       await insertStrategyTrade(trade);
     }
@@ -476,7 +476,7 @@ function updateMFEMAE(trade, candle) {
 /**
  * Close trade
  */
-function closeTrade(trade, exitTs, exitPrice, reason, config) {
+function closeTrade(trade, exitTs, exitPrice, reason, config, runId, symbol) {
   const pnlAbs = trade.direction === 'long'
     ? (exitPrice - trade.entryPrice)
     : (trade.entryPrice - exitPrice);
@@ -489,8 +489,8 @@ function closeTrade(trade, exitTs, exitPrice, reason, config) {
   const pnlAbsAfterFees = pnlAbs - (trade.entryPrice * feePct / 100);
   
   return {
-    run_id: trade.run_id,
-    symbol: trade.symbol,
+    run_id: runId,
+    symbol: symbol,
     direction: trade.direction,
     entry_ts: trade.entryTs,
     entry_price: trade.entryPrice,
