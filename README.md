@@ -26,6 +26,7 @@ De bot bestaat uit 5 lagen:
 9. **Voor Strategy Evaluator**: Run ook `supabase/migrations/003_update_trade_proposals.sql` om de `trade_proposals` tabel te updaten
 10. **Voor Paper Performance Engine**: Run ook `supabase/migrations/004_paper_performance.sql` om paper trading te activeren
 11. **Voor Backtest Engine**: Run ook `supabase/migrations/005_backtest_tables.sql` om backtest tabellen aan te maken
+    - Dit creëert `strategy_runs` en `strategy_trades` tabellen met RLS policies
 
 ### 2. Supabase API Keys
 

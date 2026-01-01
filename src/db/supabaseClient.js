@@ -786,7 +786,7 @@ export async function createStrategyRun(runData) {
  * Update strategy run
  * 
  * @param {string} runId - Run ID
- * @param {object} updateData - Data to update
+ * @param {object} updateData - Data to update (status, results, error, completed_at)
  * @returns {Promise<object>} Updated run
  */
 export async function updateStrategyRun(runId, updateData) {
@@ -795,6 +795,16 @@ export async function updateStrategyRun(runId, updateData) {
   }
 
   try {
+    // Ensure results is always a JSON object (not null)
+    if (updateData.results === null || updateData.results === undefined) {
+      updateData.results = {};
+    }
+    
+    // Set completed_at if status is 'done' or 'failed'
+    if ((updateData.status === 'done' || updateData.status === 'failed') && !updateData.completed_at) {
+      updateData.completed_at = new Date().toISOString();
+    }
+    
     const result = await supabaseRequest('PATCH', `strategy_runs?id=eq.${runId}`, updateData, {
       select: '*',
     });

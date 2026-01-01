@@ -107,13 +107,15 @@ export async function runBacktest({ symbol, startTs, endTs, config }) {
             direction: openTrade.direction,
             entry_ts: openTrade.entryTs,
             entry_price: openTrade.entryPrice,
+            stop_loss: openTrade.stopLoss,
+            take_profit: openTrade.takeProfit,
             exit_ts: candleTsIso,
             exit_price: exitResult.exitPrice,
             exit_reason: exitResult.reason,
             pnl_abs: exitResult.pnlAbs,
             pnl_pct: exitResult.pnlPct,
-            mfe_pct: exitResult.mfePct,
-            mae_pct: exitResult.maePct,
+            mfe: exitResult.mfePct, // Store as numeric (percentage)
+            mae: exitResult.maePct, // Store as numeric (percentage)
           };
           
           trades.push(trade);
@@ -494,13 +496,15 @@ function closeTrade(trade, exitTs, exitPrice, reason, config, runId, symbol) {
     direction: trade.direction,
     entry_ts: trade.entryTs,
     entry_price: trade.entryPrice,
+    stop_loss: trade.stopLoss,
+    take_profit: trade.takeProfit,
     exit_ts: exitTs,
     exit_price: exitPrice,
     exit_reason: reason,
     pnl_abs: pnlAbsAfterFees,
     pnl_pct: pnlPctAfterFees,
-    mfe_pct: trade.mfePct,
-    mae_pct: trade.maePct,
+    mfe: trade.mfePct, // Store as numeric (percentage)
+    mae: trade.maePct, // Store as numeric (percentage)
   };
 }
 
