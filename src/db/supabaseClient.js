@@ -939,6 +939,55 @@ export async function insertStrategyTrade(trade) {
 }
 
 /**
+ * Get candles for a time range using RPC function (more efficient for large datasets)
+ * 
+ * @param {object} options
+ * @param {string} options.symbol
+ * @param {number} options.timeframeMin
+ * @param {string} options.startTs - ISO timestamp
+ * @param {string} options.endTs - ISO timestamp
+ * @returns {Promise<Array>} Array of candles
+ */
+async function getCandlesInRangeRPC({ symbol, timeframeMin, startTs, endTs }) {
+  if (!isSupabaseConfigured()) {
+    return [];
+  }
+
+  try {
+    const client = getSupabaseClient();
+    const url = `${client.url}/rest/v1/rpc/get_candles_range`;
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'apikey': client.key,
+        'Authorization': `Bearer ${client.key}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=representation',
+      },
+      body: JSON.stringify({
+        p_symbol: symbol,
+        p_timeframe_min: timeframeMin,
+        p_start_ts: startTs,
+        p_end_ts: endTs,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[supabase] RPC get_candles_range failed: ${response.status} ${errorText}`);
+      return null; // Return null to indicate failure (not empty array)
+    }
+
+    const data = await response.json();
+    return data || [];
+  } catch (error) {
+    console.error('[supabase] RPC get_candles_range error:', error);
+    return null; // Return null to indicate failure
+  }
+}
+
+/**
  * Get candles for a time range with pagination
  * 
  * @param {object} options
@@ -947,13 +996,43 @@ export async function insertStrategyTrade(trade) {
  * @param {string} options.startTs - ISO timestamp
  * @param {string} options.endTs - ISO timestamp
  * @param {number} options.chunkSize - Number of rows per page (default: 5000)
+ * @param {boolean} options.useRpc - Use RPC function instead of REST (default: true)
  * @returns {Promise<Array>} Array of candles
  */
-export async function getCandlesInRange({ symbol, timeframeMin, startTs, endTs, chunkSize = 5000 }) {
+export async function getCandlesInRange({ symbol, timeframeMin, startTs, endTs, chunkSize = 5000, useRpc = true }) {
   if (!isSupabaseConfigured()) {
     return [];
   }
 
+  // Calculate expected count (rough estimate)
+  const startMs = new Date(startTs).getTime();
+  const endMs = new Date(endTs).getTime();
+  const minutesBetween = (endMs - startMs) / (60 * 1000);
+  const expectedCount = Math.floor(minutesBetween / timeframeMin);
+  
+  // Try RPC first (more efficient for large datasets)
+  if (useRpc) {
+    try {
+      const rpcCandles = await getCandlesInRangeRPC({ symbol, timeframeMin, startTs, endTs });
+      if (rpcCandles !== null) {
+        // RPC succeeded
+        console.log(`[supabase] RPC fetched ${symbol} ${timeframeMin}m: ${rpcCandles.length} candles (expected ~${expectedCount})`);
+        
+        if (rpcCandles.length < expectedCount * 0.5) {
+          console.warn(`[supabase] ⚠️  Suspiciously low RPC candle count: got ${rpcCandles.length}, expected ~${expectedCount}`);
+        }
+        
+        return rpcCandles;
+      }
+      // RPC failed, fall through to REST pagination
+      console.warn(`[supabase] RPC get_candles_range failed, falling back to REST pagination`);
+    } catch (rpcError) {
+      console.warn(`[supabase] RPC get_candles_range error, falling back to REST pagination:`, rpcError.message);
+      // Fall through to REST pagination
+    }
+  }
+
+  // REST pagination fallback
   try {
     const client = getSupabaseClient();
     const allCandles = [];
@@ -961,13 +1040,7 @@ export async function getCandlesInRange({ symbol, timeframeMin, startTs, endTs, 
     let page = 0;
     let hasMore = true;
     
-    // Calculate expected count (rough estimate)
-    const startMs = new Date(startTs).getTime();
-    const endMs = new Date(endTs).getTime();
-    const minutesBetween = (endMs - startMs) / (60 * 1000);
-    const expectedCount = Math.floor(minutesBetween / timeframeMin);
-    
-    console.log(`[supabase] Fetching candles: ${symbol} ${timeframeMin}m from ${startTs} to ${endTs} (expected ~${expectedCount} candles)`);
+    console.log(`[supabase] Fetching candles via REST: ${symbol} ${timeframeMin}m from ${startTs} to ${endTs} (expected ~${expectedCount} candles)`);
     
     while (hasMore) {
       page++;
