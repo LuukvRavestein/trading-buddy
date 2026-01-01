@@ -939,41 +939,83 @@ export async function insertStrategyTrade(trade) {
 }
 
 /**
- * Get candles for a time range
+ * Get candles for a time range with pagination
  * 
  * @param {object} options
  * @param {string} options.symbol
  * @param {number} options.timeframeMin
  * @param {string} options.startTs - ISO timestamp
  * @param {string} options.endTs - ISO timestamp
+ * @param {number} options.chunkSize - Number of rows per page (default: 5000)
  * @returns {Promise<Array>} Array of candles
  */
-export async function getCandlesInRange({ symbol, timeframeMin, startTs, endTs }) {
+export async function getCandlesInRange({ symbol, timeframeMin, startTs, endTs, chunkSize = 5000 }) {
   if (!isSupabaseConfigured()) {
     return [];
   }
 
   try {
     const client = getSupabaseClient();
-    const url = `${client.url}/rest/v1/candles?symbol=eq.${symbol}&timeframe_min=eq.${timeframeMin}&ts=gte.${startTs}&ts=lte.${endTs}&order=ts.asc&select=*`;
+    const allCandles = [];
+    let offset = 0;
+    let page = 0;
+    let hasMore = true;
     
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'apikey': client.key,
-        'Authorization': `Bearer ${client.key}`,
-        'Content-Type': 'application/json',
-      },
-    });
+    // Calculate expected count (rough estimate)
+    const startMs = new Date(startTs).getTime();
+    const endMs = new Date(endTs).getTime();
+    const minutesBetween = (endMs - startMs) / (60 * 1000);
+    const expectedCount = Math.floor(minutesBetween / timeframeMin);
+    
+    console.log(`[supabase] Fetching candles: ${symbol} ${timeframeMin}m from ${startTs} to ${endTs} (expected ~${expectedCount} candles)`);
+    
+    while (hasMore) {
+      page++;
+      const url = `${client.url}/rest/v1/candles?symbol=eq.${symbol}&timeframe_min=eq.${timeframeMin}&ts=gte.${startTs}&ts=lte.${endTs}&order=ts.asc&limit=${chunkSize}&offset=${offset}&select=*`;
+      
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'apikey': client.key,
+          'Authorization': `Bearer ${client.key}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'count=exact', // Get total count in Content-Range header
+        },
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[supabase] Failed to get candles in range: ${response.status} ${errorText}`);
-      return [];
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[supabase] Failed to get candles in range (page ${page}): ${response.status} ${errorText}`);
+        break;
+      }
+
+      const data = await response.json();
+      const pageCandles = data || [];
+      
+      // Append to array (memory-safe: O(n) total)
+      allCandles.push(...pageCandles);
+      
+      // Check if we got fewer than chunk size (last page)
+      hasMore = pageCandles.length === chunkSize;
+      offset += pageCandles.length;
+      
+      console.log(`[supabase] Fetched page ${page}: ${pageCandles.length} candles (total: ${allCandles.length})`);
+      
+      // Safety: prevent infinite loops
+      if (page > 1000) {
+        console.warn(`[supabase] Stopped pagination after 1000 pages (safety limit)`);
+        break;
+      }
     }
-
-    const data = await response.json();
-    return data || [];
+    
+    // Warn if count is suspiciously low
+    if (allCandles.length < expectedCount * 0.5) {
+      console.warn(`[supabase] Suspiciously low candle count: got ${allCandles.length}, expected ~${expectedCount} for ${timeframeMin}m timeframe`);
+    } else {
+      console.log(`[supabase] Completed fetching ${symbol} ${timeframeMin}m: ${allCandles.length} candles across ${page} page(s)`);
+    }
+    
+    return allCandles;
   } catch (error) {
     console.error('[supabase] Failed to get candles in range:', error);
     return [];
