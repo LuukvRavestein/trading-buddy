@@ -27,6 +27,12 @@ export function buildTimeframeState({ symbol, timeframeMin, candles }) {
   // Sort candles by timestamp (ascending)
   const sortedCandles = [...candles].sort((a, b) => a.t - b.t);
   const latestCandle = sortedCandles[sortedCandles.length - 1];
+  const firstCandle = sortedCandles[0];
+  
+  // Verify latest candle is actually the most recent
+  if (latestCandle.t < firstCandle.t) {
+    console.warn(`[stateBuilder] Warning: Latest candle ts (${latestCandle.t}) < first candle ts (${firstCandle.t}) - sorting may be incorrect`);
+  }
   
   // Configuration
   const pivotLen = 2; // Pivot length for swing detection
@@ -49,23 +55,28 @@ export function buildTimeframeState({ symbol, timeframeMin, candles }) {
   );
   
   // Build state object
+  // Ensure ts is the latest candle timestamp in ISO format (Z timezone)
+  const stateTs = new Date(latestCandle.t).toISOString();
+  
   const state = {
     symbol,
-    timeframe_min: timeframeMin,
-    ts: new Date(latestCandle.t).toISOString(),
+    timeframe_min: timeframeMin, // Ensure integer
+    ts: stateTs, // ISO string with Z timezone
     trend,
     atr: atr !== null ? atr.toString() : null,
     last_swing_high: swings.lastSwingHigh !== null ? swings.lastSwingHigh.toString() : null,
     last_swing_low: swings.lastSwingLow !== null ? swings.lastSwingLow.toString() : null,
     bos_direction: bosDirection,
     choch_direction: chochDirection,
-    last_candle_ts: new Date(latestCandle.t).toISOString(),
+    last_candle_ts: stateTs, // Same as ts
     metadata: {
       pivotLen,
       atrPeriod,
       swingHighCount: swings.swingHighs.length,
       swingLowCount: swings.swingLows.length,
       candlesProcessed: sortedCandles.length,
+      firstCandleTs: new Date(firstCandle.t).toISOString(),
+      latestCandleTs: stateTs,
     },
   };
   

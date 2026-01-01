@@ -5,10 +5,11 @@
  * Only processes new candles since last state.
  */
 
-import { getLatestCandles, getLatestTimeframeState, upsertTimeframeState } from '../db/supabaseClient.js';
+import { getLatestCandles, getLatestTimeframeState, upsertTimeframeState, getSupabaseClient, isSupabaseConfigured } from '../db/supabaseClient.js';
 import { buildTimeframeState } from './stateBuilder.mjs';
 
 const STATE_LOOKBACK = parseInt(process.env.STATE_LOOKBACK || '500', 10);
+const STATE_DEBUG = process.env.STATE_DEBUG === '1' || process.env.STRATEGY_DEBUG === '1';
 
 /**
  * Run state update for a single timeframe
@@ -19,13 +20,45 @@ const STATE_LOOKBACK = parseInt(process.env.STATE_LOOKBACK || '500', 10);
  * @returns {Promise<object>} Result object
  */
 export async function runStateUpdateForTimeframe({ symbol, timeframeMin }) {
+  console.log(`[stateRunner] State update start: ${timeframeMin}m, symbol: ${symbol}`);
+  
   try {
+    // Debug: Query max candle ts for this timeframe
+    if (STATE_DEBUG && isSupabaseConfigured()) {
+      try {
+        const client = getSupabaseClient();
+        const url = `${client.url}/rest/v1/candles?symbol=eq.${symbol}&timeframe_min=eq.${timeframeMin}&order=ts.desc&limit=1&select=ts`;
+        const response = await fetch(url, {
+          method: 'GET',
+          headers: {
+            'apikey': client.key,
+            'Authorization': `Bearer ${client.key}`,
+            'Content-Type': 'application/json',
+          },
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.length > 0) {
+            console.log(`[stateRunner] 🔍 DEBUG ${timeframeMin}m: Max candle ts in DB: ${data[0].ts}`);
+          } else {
+            console.log(`[stateRunner] 🔍 DEBUG ${timeframeMin}m: No candles found in DB`);
+          }
+        }
+      } catch (debugError) {
+        console.error(`[stateRunner] Debug query error:`, debugError);
+      }
+    }
+    
     // Get last state timestamp
     const lastState = await getLatestTimeframeState({ symbol, timeframeMin });
     let lastStateTs = null;
     
     if (lastState && lastState.ts) {
       lastStateTs = new Date(lastState.ts);
+      console.log(`[stateRunner] ${timeframeMin}m: Last state ts: ${lastState.ts}`);
+    } else {
+      console.log(`[stateRunner] ${timeframeMin}m: No previous state found`);
     }
     
     // Determine lookback window
@@ -44,7 +77,10 @@ export async function runStateUpdateForTimeframe({ symbol, timeframeMin }) {
       limit: STATE_LOOKBACK,
     });
     
+    console.log(`[stateRunner] ${timeframeMin}m: Fetched ${allCandles.length} candles from DB`);
+    
     if (allCandles.length === 0) {
+      console.log(`[stateRunner] State skipped ${timeframeMin}m: No candles available`);
       return {
         timeframeMin,
         success: false,
@@ -52,23 +88,35 @@ export async function runStateUpdateForTimeframe({ symbol, timeframeMin }) {
       };
     }
     
+    // Get latest candle ts for reference
+    const latestCandleTs = allCandles[0]?.ts; // First candle is latest (ordered desc)
+    if (latestCandleTs) {
+      console.log(`[stateRunner] ${timeframeMin}m: Latest candle ts in fetched set: ${latestCandleTs}`);
+    }
+    
     // Filter to only new candles if we have last state
     let candlesToProcess = allCandles;
     if (lastStateTs) {
-      candlesToProcess = allCandles.filter(c => {
+      const newCandles = allCandles.filter(c => {
         const candleTs = new Date(c.ts);
         return candleTs > lastStateTs;
       });
       
+      console.log(`[stateRunner] ${timeframeMin}m: Found ${newCandles.length} new candles since last state`);
+      
       // If no new candles, check if we should still update (in case of gaps)
-      if (candlesToProcess.length === 0) {
+      if (newCandles.length === 0) {
         // Use all candles for state computation (might have gaps to fill)
         candlesToProcess = allCandles;
+        console.log(`[stateRunner] ${timeframeMin}m: No new candles, using all ${allCandles.length} candles for state computation`);
       } else {
         // Include some overlap for proper swing detection
         // Include last STATE_LOOKBACK candles total
         candlesToProcess = allCandles.slice(-STATE_LOOKBACK);
+        console.log(`[stateRunner] ${timeframeMin}m: Using ${candlesToProcess.length} candles (with overlap) for state computation`);
       }
+    } else {
+      console.log(`[stateRunner] ${timeframeMin}m: No previous state, using all ${allCandles.length} candles for initial state`);
     }
     
     // Convert Supabase candles to stateBuilder format
@@ -81,8 +129,17 @@ export async function runStateUpdateForTimeframe({ symbol, timeframeMin }) {
       v: parseFloat(c.volume || 0),
     }));
     
-    // Sort by timestamp
+    // Sort by timestamp (ascending)
     candles.sort((a, b) => a.t - b.t);
+    
+    if (candles.length === 0) {
+      console.log(`[stateRunner] State skipped ${timeframeMin}m: No candles to process after filtering`);
+      return {
+        timeframeMin,
+        success: false,
+        reason: 'No candles to process after filtering',
+      };
+    }
     
     // Build state
     const state = buildTimeframeState({
@@ -91,19 +148,28 @@ export async function runStateUpdateForTimeframe({ symbol, timeframeMin }) {
       candles,
     });
     
+    console.log(`[stateRunner] ${timeframeMin}m: Built state with ts: ${state.ts}`);
+    
     // Check if state has advanced (new candle processed)
-    if (lastStateTs && new Date(state.ts) <= lastStateTs) {
-      return {
-        timeframeMin,
-        success: false,
-        reason: 'No new candles to process',
-        lastStateTs: lastStateTs.toISOString(),
-        currentStateTs: state.ts,
-      };
+    if (lastStateTs) {
+      const stateTsDate = new Date(state.ts);
+      if (stateTsDate <= lastStateTs) {
+        console.log(`[stateRunner] State skipped ${timeframeMin}m: No new candles to process (state ts ${state.ts} <= last state ts ${lastStateTs.toISOString()})`);
+        return {
+          timeframeMin,
+          success: false,
+          reason: 'No new candles to process',
+          lastStateTs: lastStateTs.toISOString(),
+          currentStateTs: state.ts,
+        };
+      }
     }
     
     // Upsert state
+    console.log(`[stateRunner] ${timeframeMin}m: Upserting state with ts: ${state.ts}, timeframe_min: ${timeframeMin}`);
     await upsertTimeframeState(state);
+    
+    console.log(`[stateRunner] State updated ${timeframeMin}m: ts=${state.ts}, trend=${state.trend}, candlesProcessed=${candles.length}`);
     
     return {
       timeframeMin,
@@ -138,6 +204,7 @@ export async function runStateUpdateForTimeframe({ symbol, timeframeMin }) {
  * @returns {Promise<object>} Results for all timeframes
  */
 export async function runStateUpdate({ symbol, timeframes }) {
+  console.log(`[stateRunner] Starting state update for ${timeframes.length} timeframes: [${timeframes.join(', ')}]m, symbol: ${symbol}`);
   const results = {};
   
   for (const timeframeMin of timeframes) {
@@ -155,6 +222,11 @@ export async function runStateUpdate({ symbol, timeframes }) {
       };
     }
   }
+  
+  // Summary log
+  const successful = Object.values(results).filter(r => r.success).length;
+  const failed = Object.values(results).filter(r => !r.success).length;
+  console.log(`[stateRunner] State update complete: ${successful} successful, ${failed} failed`);
   
   return results;
 }
