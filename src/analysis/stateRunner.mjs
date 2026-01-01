@@ -24,6 +24,7 @@ export async function runStateUpdateForTimeframe({ symbol, timeframeMin }) {
   
   try {
     // Debug: Query max candle ts for this timeframe
+    let maxTsFromDB = null;
     if (STATE_DEBUG && isSupabaseConfigured()) {
       try {
         const client = getSupabaseClient();
@@ -40,7 +41,8 @@ export async function runStateUpdateForTimeframe({ symbol, timeframeMin }) {
         if (response.ok) {
           const data = await response.json();
           if (data && data.length > 0) {
-            console.log(`[stateRunner] 🔍 DEBUG ${timeframeMin}m: Max candle ts in DB: ${data[0].ts}`);
+            maxTsFromDB = data[0].ts;
+            console.log(`[stateRunner] 🔍 DEBUG ${timeframeMin}m: Max candle ts in DB: ${maxTsFromDB}`);
           } else {
             console.log(`[stateRunner] 🔍 DEBUG ${timeframeMin}m: No candles found in DB`);
           }
