@@ -24,10 +24,46 @@ export function getSupabaseClient() {
   }
 
   const supabaseUrl = process.env.SUPABASE_URL;
-  const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const anonKey = process.env.SUPABASE_ANON_KEY;
+
+  // Diagnostic logging
+  let urlHostname = 'unknown';
+  let projectRef = 'unknown';
+  if (supabaseUrl) {
+    try {
+      const url = new URL(supabaseUrl);
+      urlHostname = url.hostname;
+      // Extract project ref from subdomain (e.g., xxxxx.supabase.co -> xxxxx)
+      const parts = urlHostname.split('.');
+      if (parts.length > 0 && parts[0] !== 'www') {
+        projectRef = parts[0];
+      }
+    } catch (e) {
+      // Invalid URL format
+    }
+  }
+
+  const hasServiceRoleKey = !!serviceRoleKey;
+  const hasAnonKey = !!anonKey;
+  let selectedKeyType = 'missing';
+
+  if (hasServiceRoleKey) {
+    selectedKeyType = 'service_role';
+  } else if (hasAnonKey) {
+    selectedKeyType = 'anon';
+  }
+
+  console.log('[supabase] Diagnostic info:', {
+    urlHostname,
+    projectRef,
+    hasServiceRoleKey,
+    hasAnonKey,
+    selectedKeyType,
+  });
 
   // Check if Supabase is configured
-  if (!supabaseUrl || !supabaseKey) {
+  if (!supabaseUrl || !serviceRoleKey) {
     console.warn('[supabase] Supabase not configured. Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
     isConfigured = false;
     return null;
@@ -37,7 +73,7 @@ export function getSupabaseClient() {
     isConfigured = true;
     supabaseClient = {
       url: supabaseUrl,
-      key: supabaseKey,
+      key: serviceRoleKey,
     };
     
     console.log('[supabase] Supabase client initialized');
@@ -59,6 +95,71 @@ export function isSupabaseConfigured() {
     getSupabaseClient();
   }
   return isConfigured;
+}
+
+/**
+ * Health check: Test if strategy_runs table is accessible via REST
+ * 
+ * @returns {Promise<object>} { success: boolean, error?: string, status?: number }
+ */
+export async function healthCheckStrategyRuns() {
+  const client = getSupabaseClient();
+  if (!client) {
+    return { success: false, error: 'Supabase client not initialized' };
+  }
+
+  try {
+    // Extract hostname for logging
+    let urlHostname = 'unknown';
+    let selectedKeyType = 'service_role'; // We use service_role key
+    try {
+      const url = new URL(client.url);
+      urlHostname = url.hostname;
+    } catch (e) {
+      // Invalid URL
+    }
+
+    const url = `${client.url}/rest/v1/strategy_runs?select=id&limit=1`;
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'apikey': client.key,
+        'Authorization': `Bearer ${client.key}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[supabase] Health check failed:', {
+        urlHostname,
+        selectedKeyType,
+        status: response.status,
+        statusText: response.statusText,
+        error: errorText.substring(0, 500),
+      });
+      return {
+        success: false,
+        status: response.status,
+        error: errorText.substring(0, 500),
+        urlHostname,
+        selectedKeyType,
+      };
+    }
+
+    console.log('[supabase] Health check passed: strategy_runs visible via REST', {
+      urlHostname,
+      selectedKeyType,
+    });
+    return { success: true, urlHostname, selectedKeyType };
+  } catch (error) {
+    console.error('[supabase] Health check error:', {
+      error: error.message,
+      urlHostname: client.url ? new URL(client.url).hostname : 'unknown',
+      selectedKeyType: 'service_role',
+    });
+    return { success: false, error: error.message };
+  }
 }
 
 /**

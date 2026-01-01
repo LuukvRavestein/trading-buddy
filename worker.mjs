@@ -19,7 +19,7 @@
 
 console.log("Worker started OK (ESM)");
 
-import { getSupabaseClient } from './src/db/supabaseClient.js';
+import { getSupabaseClient, healthCheckStrategyRuns } from './src/db/supabaseClient.js';
 import { ingestAllTimeframes, needsBackfill, initializeWebSocketFallback } from './src/ingest/marketDataIngest.mjs';
 import { getDataSource } from './src/ingest/candleBuilder.js';
 import { runStateUpdate } from './src/analysis/stateRunner.mjs';
@@ -66,6 +66,23 @@ async function runWorker() {
     log('warn', 'Supabase not configured - worker will run in limited mode');
   } else {
     log('info', 'Supabase connected');
+    
+    // Health check: Test if strategy_runs table is accessible
+    try {
+      const healthCheck = await healthCheckStrategyRuns();
+      if (!healthCheck.success) {
+        log('warn', 'Supabase health check failed', {
+          error: healthCheck.error,
+          status: healthCheck.status,
+          urlHostname: healthCheck.urlHostname,
+          selectedKeyType: healthCheck.selectedKeyType,
+        });
+      }
+    } catch (healthError) {
+      log('warn', 'Supabase health check error', {
+        error: healthError.message,
+      });
+    }
   }
 
   // Main loop
