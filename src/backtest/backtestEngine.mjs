@@ -39,10 +39,10 @@ export async function runBacktest({ symbol, startTs, endTs, config }) {
     
     console.log(`[backtest] Loading candles from ${lookbackStart} to ${endTs}`);
     
-    // Calculate expected counts for validation
-    const startMs = new Date(lookbackStart).getTime();
-    const endMs = new Date(endTs).getTime();
-    const minutesBetween = (endMs - startMs) / (60 * 1000);
+    // Calculate expected counts for validation (using lookback range)
+    const lookbackStartMs = new Date(lookbackStart).getTime();
+    const lookbackEndMs = new Date(endTs).getTime();
+    const minutesBetween = (lookbackEndMs - lookbackStartMs) / (60 * 1000);
     const expectedCounts = {
       1: Math.floor(minutesBetween / 1),
       5: Math.floor(minutesBetween / 5),
@@ -92,10 +92,10 @@ export async function runBacktest({ symbol, startTs, endTs, config }) {
     const candles15mSorted = convertCandles(candles15m);
     const candles60mSorted = convertCandles(candles60m);
     
-    // Filter to backtest period (1m only)
-    const startMs = new Date(startTs).getTime();
-    const endMs = new Date(endTs).getTime();
-    const backtestCandles = candles1mSorted.filter(c => c.t >= startMs && c.t <= endMs);
+    // Filter to backtest period (1m only) - use backtest start/end, not lookback
+    const backtestStartMs = new Date(startTs).getTime();
+    const backtestEndMs = new Date(endTs).getTime();
+    const backtestCandles = candles1mSorted.filter(c => c.t >= backtestStartMs && c.t <= backtestEndMs);
     
     console.log(`[backtest] Backtest period: ${backtestCandles.length} 1m candles`);
     
