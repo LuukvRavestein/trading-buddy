@@ -25,6 +25,7 @@ De bot bestaat uit 5 lagen:
 8. **Voor State Builder**: Run ook `supabase/migrations/002_update_timeframe_state.sql` om de `timeframe_state` tabel te updaten
 9. **Voor Strategy Evaluator**: Run ook `supabase/migrations/003_update_trade_proposals.sql` om de `trade_proposals` tabel te updaten
 10. **Voor Paper Performance Engine**: Run ook `supabase/migrations/004_paper_performance.sql` om paper trading te activeren
+11. **Voor Backtest Engine**: Run ook `supabase/migrations/005_backtest_tables.sql` om backtest tabellen aan te maken
 
 ### 2. Supabase API Keys
 
@@ -252,6 +253,109 @@ LOG_LEVEL=info  # debug, info, warn, error
    - `rr` ≈ 2.0 (risk/reward ratio)
    - `entry_price` tussen `stop_loss` en `take_profit`
    - `reason` bevat HTF context + LTF trigger
+
+## 🧪 Backtesting & Optimization
+
+### Running Backtests
+
+De bot heeft een ingebouwde backtest engine die historische data gebruikt om strategie varianten te testen en te optimaliseren.
+
+#### 1. Database Setup
+
+Zorg dat je de backtest tabellen hebt aangemaakt:
+```sql
+-- Run in Supabase SQL Editor
+-- File: supabase/migrations/005_backtest_tables.sql
+```
+
+#### 2. Configure Backtest Mode
+
+In Render, voeg de volgende environment variables toe:
+
+```
+BACKTEST_MODE=1
+BACKTEST_START_TS=2025-12-01T00:00:00Z
+BACKTEST_END_TS=2025-12-31T23:59:59Z
+SYMBOL=BTC-PERPETUAL
+DD_LIMIT=10  # Max drawdown % (default: 10)
+```
+
+#### 3. Run Backtest
+
+1. Deploy de worker met `BACKTEST_MODE=1`
+2. De worker zal:
+   - Alle configuratie varianten testen (grid search)
+   - Elke variant backtesten over de opgegeven periode
+   - Resultaten opslaan in `strategy_runs` en `strategy_trades` tabellen
+   - Top 10 configuraties loggen met metrics
+3. Na voltooiing stopt de worker automatisch
+
+#### 4. View Results
+
+**In Supabase SQL Editor:**
+
+```sql
+-- Top 10 runs by score
+SELECT 
+  id,
+  symbol,
+  start_ts,
+  end_ts,
+  status,
+  results->>'trades' as trades,
+  results->>'winrate' as winrate,
+  results->>'total_pnl_pct' as pnl_pct,
+  results->>'max_drawdown_pct' as drawdown_pct,
+  results->>'profit_factor' as profit_factor,
+  results->>'expectancy_pct' as expectancy_pct,
+  config
+FROM strategy_runs
+WHERE status = 'done'
+ORDER BY (results->>'expectancy_pct')::numeric DESC
+LIMIT 10;
+
+-- Trades for a specific run
+SELECT 
+  direction,
+  entry_ts,
+  entry_price,
+  exit_ts,
+  exit_price,
+  exit_reason,
+  pnl_pct,
+  mfe_pct,
+  mae_pct
+FROM strategy_trades
+WHERE run_id = 'YOUR_RUN_ID'
+ORDER BY entry_ts;
+```
+
+#### 5. Backtest Metrics
+
+Elke backtest berekent:
+- **trades**: Aantal trades
+- **winrate**: Win percentage
+- **total_pnl_pct**: Totale PnL percentage
+- **avg_pnl_pct**: Gemiddelde PnL per trade
+- **expectancy_pct**: Expectancy (primary ranking metric)
+- **max_drawdown_pct**: Maximale drawdown
+- **profit_factor**: Gross profit / Gross loss
+- **avg_trade_duration_min**: Gemiddelde trade duur in minuten
+
+#### 6. Strategy Parameters
+
+De optimizer test verschillende combinaties van:
+- **Regime**: `require_5m_align`, `require_60m_align`
+- **Entry**: `entry_trigger` ('choch', 'bos', 'either')
+- **Exits**: `rr_target` (1.5, 2.0, 2.5), `timeout_min` (0, 30, 45)
+- **Risk**: `sl_atr_buffer` (0.2, 0.3), `min_risk_pct` (0.001, 0.0015)
+- **Costs**: `taker_fee_bps` (default 5), `slippage_bps` (default 2)
+
+#### 7. Normal Mode
+
+Om terug te gaan naar normale live/paper trading mode:
+- Verwijder `BACKTEST_MODE` environment variable of zet `BACKTEST_MODE=0`
+- De worker zal dan normaal draaien
 
 ## 🔧 Development
 

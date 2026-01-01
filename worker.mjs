@@ -26,6 +26,7 @@ import { runStateUpdate } from './src/analysis/stateRunner.mjs';
 import { evaluateStrategy } from './src/strategy/strategyEvaluator.mjs';
 import { saveProposal } from './src/strategy/proposalWriter.mjs';
 import { runPaperEngine } from './src/paper/paperEngine.mjs';
+import { runOptimizer } from './src/backtest/optimizer.mjs';
 
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const POLL_INTERVAL_SECONDS = parseInt(process.env.POLL_INTERVAL_SECONDS || '60', 10);
@@ -275,12 +276,66 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
-// Start worker
-runWorker().catch((error) => {
-  log('error', 'Fatal error starting worker', {
-    error: error.message,
-    stack: error.stack,
+/**
+ * Run backtest optimizer mode
+ */
+async function runBacktestMode() {
+  const BACKTEST_MODE = process.env.BACKTEST_MODE === '1';
+  const BACKTEST_START_TS = process.env.BACKTEST_START_TS;
+  const BACKTEST_END_TS = process.env.BACKTEST_END_TS;
+  const SYMBOL = process.env.SYMBOL || 'BTC-PERPETUAL';
+  
+  if (!BACKTEST_MODE) {
+    return false; // Not in backtest mode
+  }
+  
+  if (!BACKTEST_START_TS || !BACKTEST_END_TS) {
+    throw new Error('BACKTEST_MODE=1 requires BACKTEST_START_TS and BACKTEST_END_TS environment variables');
+  }
+  
+  log('info', 'Running in BACKTEST_MODE', {
+    symbol: SYMBOL,
+    startTs: BACKTEST_START_TS,
+    endTs: BACKTEST_END_TS,
   });
-  process.exit(1);
-});
+  
+  try {
+    const top10 = await runOptimizer({
+      symbol: SYMBOL,
+      startTs: BACKTEST_START_TS,
+      endTs: BACKTEST_END_TS,
+    });
+    
+    log('info', 'Backtest optimizer complete', {
+      topConfigs: top10.length,
+    });
+    
+    return true; // Backtest mode completed
+  } catch (error) {
+    log('error', 'Backtest optimizer failed', {
+      error: error.message,
+      stack: error.stack,
+    });
+    throw error;
+  }
+}
+
+// Start worker or backtest mode
+(async () => {
+  const isBacktestMode = await runBacktestMode();
+  
+  if (isBacktestMode) {
+    log('info', 'Backtest mode complete, exiting');
+    process.exit(0);
+  } else {
+    // Run normal worker
+    runWorker().catch((error) => {
+      log('error', 'Fatal error starting worker', {
+        error: error.message,
+        stack: error.stack,
+      });
+      process.exit(1);
+    });
+  }
+})();
 

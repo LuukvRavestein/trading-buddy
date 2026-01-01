@@ -756,3 +756,116 @@ export async function updatePaperTrade(tradeId, updateData) {
   }
 }
 
+// ============================================================================
+// BACKTEST OPERATIONS
+// ============================================================================
+
+/**
+ * Create a new strategy run
+ * 
+ * @param {object} runData - Run data
+ * @returns {Promise<object>} Created run
+ */
+export async function createStrategyRun(runData) {
+  if (!isSupabaseConfigured()) {
+    throw new Error('Supabase not configured');
+  }
+
+  try {
+    const result = await supabaseRequest('POST', 'strategy_runs', runData, {
+      select: '*',
+    });
+    return result[0] || runData;
+  } catch (error) {
+    console.error('[supabase] Failed to create strategy run:', error);
+    throw error;
+  }
+}
+
+/**
+ * Update strategy run
+ * 
+ * @param {string} runId - Run ID
+ * @param {object} updateData - Data to update
+ * @returns {Promise<object>} Updated run
+ */
+export async function updateStrategyRun(runId, updateData) {
+  if (!isSupabaseConfigured()) {
+    throw new Error('Supabase not configured');
+  }
+
+  try {
+    const result = await supabaseRequest('PATCH', `strategy_runs?id=eq.${runId}`, updateData, {
+      select: '*',
+    });
+    return result[0] || null;
+  } catch (error) {
+    console.error('[supabase] Failed to update strategy run:', error);
+    throw error;
+  }
+}
+
+/**
+ * Insert strategy trade
+ * 
+ * @param {object} trade - Trade object
+ * @returns {Promise<object>} Inserted trade
+ */
+export async function insertStrategyTrade(trade) {
+  if (!isSupabaseConfigured()) {
+    throw new Error('Supabase not configured');
+  }
+
+  try {
+    const result = await supabaseRequest('POST', 'strategy_trades', trade, {
+      select: '*',
+    });
+    return result[0] || trade;
+  } catch (error) {
+    console.error('[supabase] Failed to insert strategy trade:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get candles for a time range
+ * 
+ * @param {object} options
+ * @param {string} options.symbol
+ * @param {number} options.timeframeMin
+ * @param {string} options.startTs - ISO timestamp
+ * @param {string} options.endTs - ISO timestamp
+ * @returns {Promise<Array>} Array of candles
+ */
+export async function getCandlesInRange({ symbol, timeframeMin, startTs, endTs }) {
+  if (!isSupabaseConfigured()) {
+    return [];
+  }
+
+  try {
+    const client = getSupabaseClient();
+    const url = `${client.url}/rest/v1/candles?symbol=eq.${symbol}&timeframe_min=eq.${timeframeMin}&ts=gte.${startTs}&ts=lte.${endTs}&order=ts.asc&select=*`;
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'apikey': client.key,
+        'Authorization': `Bearer ${client.key}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[supabase] Failed to get candles in range: ${response.status} ${errorText}`);
+      return [];
+    }
+
+    const data = await response.json();
+    return data || [];
+  } catch (error) {
+    console.error('[supabase] Failed to get candles in range:', error);
+    return [];
+  }
+}
+
