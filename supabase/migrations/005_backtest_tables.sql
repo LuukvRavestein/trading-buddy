@@ -67,31 +67,71 @@ ALTER TABLE public.strategy_runs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.strategy_trades ENABLE ROW LEVEL SECURITY;
 
 -- Policy: service_role has full access to strategy_runs
-CREATE POLICY IF NOT EXISTS "service_role_full_access_strategy_runs"
-  ON public.strategy_runs
-  FOR ALL
-  TO service_role
-  USING (true)
-  WITH CHECK (true);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies 
+    WHERE schemaname = 'public' 
+    AND tablename = 'strategy_runs' 
+    AND policyname = 'service_role_full_access_strategy_runs'
+  ) THEN
+    CREATE POLICY "service_role_full_access_strategy_runs"
+      ON public.strategy_runs
+      FOR ALL
+      TO service_role
+      USING (true)
+      WITH CHECK (true);
+  END IF;
+END $$;
 
 -- Policy: authenticated users can read strategy_runs
-CREATE POLICY IF NOT EXISTS "authenticated_read_strategy_runs"
-  ON public.strategy_runs
-  FOR SELECT
-  TO authenticated
-  USING (true);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies 
+    WHERE schemaname = 'public' 
+    AND tablename = 'strategy_runs' 
+    AND policyname = 'authenticated_read_strategy_runs'
+  ) THEN
+    CREATE POLICY "authenticated_read_strategy_runs"
+      ON public.strategy_runs
+      FOR SELECT
+      TO authenticated
+      USING (true);
+  END IF;
+END $$;
 
 -- Policy: service_role has full access to strategy_trades
-CREATE POLICY IF NOT EXISTS "service_role_full_access_strategy_trades"
-  ON public.strategy_trades
-  FOR ALL
-  TO service_role
-  USING (true)
-  WITH CHECK (true);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies 
+    WHERE schemaname = 'public' 
+    AND tablename = 'strategy_trades' 
+    AND policyname = 'service_role_full_access_strategy_trades'
+  ) THEN
+    CREATE POLICY "service_role_full_access_strategy_trades"
+      ON public.strategy_trades
+      FOR ALL
+      TO service_role
+      USING (true)
+      WITH CHECK (true);
+  END IF;
+END $$;
 
 -- Policy: authenticated users can read strategy_trades
-CREATE POLICY IF NOT EXISTS "authenticated_read_strategy_trades"
-  ON public.strategy_trades
-  FOR SELECT
-  TO authenticated
-  USING (true);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies 
+    WHERE schemaname = 'public' 
+    AND tablename = 'strategy_trades' 
+    AND policyname = 'authenticated_read_strategy_trades'
+  ) THEN
+    CREATE POLICY "authenticated_read_strategy_trades"
+      ON public.strategy_trades
+      FOR SELECT
+      TO authenticated
+      USING (true);
+  END IF;
+END $$;
