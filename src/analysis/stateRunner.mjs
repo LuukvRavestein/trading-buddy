@@ -105,7 +105,8 @@ export async function runStateUpdateForTimeframe({ symbol, timeframeMin }) {
         firstTsDate: firstTs ? new Date(firstTs).toISOString() : null,
         lastTsDate: lastTs ? new Date(lastTs).toISOString() : null,
         // Verify firstTs matches max ts from DB (should be close)
-        maxTsFromDB: latestCandleTs || 'not queried',
+        maxTsFromDB: maxTsFromDB || 'not queried',
+        matchesMaxTs: maxTsFromDB ? (firstTs === maxTsFromDB) : 'unknown',
       });
     }
     
