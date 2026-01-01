@@ -353,6 +353,46 @@ export async function getLatestCandles({ symbol, timeframeMin, limit = 500 }) {
 }
 
 /**
+ * Get latest single candle for a symbol and timeframe
+ * 
+ * @param {object} options
+ * @param {string} options.symbol
+ * @param {number} options.timeframeMin
+ * @returns {Promise<object|null>} Latest candle or null
+ */
+export async function getLatestCandle({ symbol, timeframeMin }) {
+  if (!isSupabaseConfigured()) {
+    return null;
+  }
+
+  try {
+    const client = getSupabaseClient();
+    const url = `${client.url}/rest/v1/candles?symbol=eq.${symbol}&timeframe_min=eq.${timeframeMin}&order=ts.desc&limit=1&select=*`;
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'apikey': client.key,
+        'Authorization': `Bearer ${client.key}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[supabase] Failed to get latest candle: ${response.status} ${errorText}`);
+      return null;
+    }
+
+    const data = await response.json();
+    return data && data.length > 0 ? data[0] : null;
+  } catch (error) {
+    console.error('[supabase] Failed to get latest candle:', error);
+    return null;
+  }
+}
+
+/**
  * Get next candle after a timestamp
  * 
  * @param {object} options

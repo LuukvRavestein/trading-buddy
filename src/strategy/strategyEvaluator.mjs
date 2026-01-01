@@ -5,8 +5,7 @@
  * Returns trade proposal if setup is valid, null otherwise.
  */
 
-import { getLatestTimeframeState } from '../db/supabaseClient.js';
-import { getLatestCandles } from '../db/supabaseClient.js';
+import { getLatestTimeframeState, getLatestCandle } from '../db/supabaseClient.js';
 
 const MIN_RISK_PCT = parseFloat(process.env.MIN_RISK_PCT || '0.1', 10) / 100; // 0.1% minimum
 const TARGET_RR = parseFloat(process.env.TARGET_RR || '2.0', 10); // 2.0 risk/reward
@@ -102,22 +101,23 @@ export async function evaluateStrategy({ symbol, nowMs, nowIso }) {
       return null;
     }
     
-    // Step 2: Entry trigger (LTF - 1m)
-    const entryTrigger = checkEntryTrigger(state1m, direction);
-    if (!entryTrigger) {
-      console.log(`[strategy] No entry trigger for ${direction} on 1m`);
-      return null;
-    }
-    
-    // Step 3: Get latest 1m candle for entry price
-    const candles1m = await getLatestCandles({ symbol, timeframeMin: 1, limit: 1 });
-    if (candles1m.length === 0) {
+    // Step 2: Get latest 1m candle for entry price and trigger check
+    const latestCandle = await getLatestCandle({ symbol, timeframeMin: 1 });
+    if (!latestCandle) {
       console.log('[strategy] No 1m candles available');
       return null;
     }
     
-    const latestCandle = candles1m[0];
     const entryPrice = parseFloat(latestCandle.close);
+    const latestCandleHigh = parseFloat(latestCandle.high);
+    const latestCandleLow = parseFloat(latestCandle.low);
+    
+    // Step 3: Entry trigger (LTF - 1m) with primary and fallback
+    const entryTrigger = checkEntryTrigger(state1m, direction, latestCandle);
+    if (!entryTrigger.triggered) {
+      console.log(`[strategy] No entry trigger for ${direction} on 1m`);
+      return null;
+    }
     
     // Step 4: Calculate Stop Loss
     // Long: last 1m swing low - (0.2 × ATR(1m))
@@ -230,35 +230,78 @@ function determineDirection(state5m, state15m) {
 }
 
 /**
- * Check entry trigger on 1m timeframe
+ * Check entry trigger on 1m timeframe with primary and fallback
  * 
  * @param {object} state1m - 1m timeframe state
  * @param {string} direction - 'long' or 'short'
- * @returns {boolean} True if trigger is valid
+ * @param {object} latestCandle - Latest 1m candle from DB
+ * @returns {object} { triggered: boolean, triggerType: 'primary'|'fallback'|null }
  */
-function checkEntryTrigger(state1m, direction) {
-  // Long setup:
-  // - Last 1m CHoCH direction == "up"
-  // - OR last BOS direction == "up"
+function checkEntryTrigger(state1m, direction, latestCandle) {
+  const latestClose = parseFloat(latestCandle.close);
+  const latestHigh = parseFloat(latestCandle.high);
+  const latestLow = parseFloat(latestCandle.low);
+  
+  const swingHigh = state1m.last_swing_high ? parseFloat(state1m.last_swing_high) : null;
+  const swingLow = state1m.last_swing_low ? parseFloat(state1m.last_swing_low) : null;
+  
+  // Primary trigger: BOS/CHoCH direction
+  let primaryTrigger = false;
   if (direction === 'long') {
-    return state1m.choch_direction === 'up' || state1m.bos_direction === 'up';
+    primaryTrigger = state1m.choch_direction === 'up' || state1m.bos_direction === 'up';
+  } else {
+    primaryTrigger = state1m.choch_direction === 'down' || state1m.bos_direction === 'down';
   }
   
-  // Short setup:
-  // - Last 1m CHoCH direction == "down"
-  // - OR last BOS direction == "down"
-  if (direction === 'short') {
-    return state1m.choch_direction === 'down' || state1m.bos_direction === 'down';
+  // Fallback trigger: Swing level breaks
+  let fallbackTrigger = false;
+  if (swingHigh !== null && swingLow !== null) {
+    if (direction === 'long') {
+      // Long: close or high breaks above swing high
+      fallbackTrigger = latestClose >= swingHigh || latestHigh >= swingHigh;
+    } else {
+      // Short: close or low breaks below swing low
+      fallbackTrigger = latestClose <= swingLow || latestLow <= swingLow;
+    }
   }
   
-  return false;
+  // Debug logging
+  if (STRATEGY_DEBUG) {
+    console.log(`[strategy] 🔍 DEBUG entry trigger for ${direction}:`, {
+      primaryTrigger,
+      primaryValues: {
+        choch_direction: state1m.choch_direction,
+        bos_direction: state1m.bos_direction,
+      },
+      fallbackTrigger,
+      fallbackValues: {
+        swingHigh,
+        swingLow,
+        latestClose,
+        latestHigh,
+        latestLow,
+      },
+      triggered: primaryTrigger || fallbackTrigger,
+      triggerType: primaryTrigger ? 'primary' : (fallbackTrigger ? 'fallback' : null),
+    });
+  }
+  
+  const triggered = primaryTrigger || fallbackTrigger;
+  const triggerType = primaryTrigger ? 'primary' : (fallbackTrigger ? 'fallback' : null);
+  
+  return {
+    triggered,
+    triggerType,
+    primaryTrigger,
+    fallbackTrigger,
+  };
 }
 
 /**
  * Build human-readable reason for proposal
  * 
  * @param {string} direction - 'long' or 'short'
- * @param {string} entryTrigger - Trigger type
+ * @param {object} entryTrigger - Trigger object with triggerType
  * @param {object} state1m - 1m state
  * @param {object} state5m - 5m state
  * @param {object} state15m - 15m state
@@ -271,10 +314,14 @@ function buildReason(direction, entryTrigger, state1m, state5m, state15m) {
   parts.push(`${state15m.trend.toUpperCase()} 15m + ${state5m.trend.toUpperCase()} 5m`);
   
   // Entry trigger
-  if (state1m.choch_direction === direction) {
-    parts.push(`1m CHoCH ${direction}`);
-  } else if (state1m.bos_direction === direction) {
-    parts.push(`1m BOS ${direction}`);
+  if (entryTrigger.triggerType === 'primary') {
+    if (state1m.choch_direction === direction) {
+      parts.push(`1m CHoCH ${direction} (primary)`);
+    } else if (state1m.bos_direction === direction) {
+      parts.push(`1m BOS ${direction} (primary)`);
+    }
+  } else if (entryTrigger.triggerType === 'fallback') {
+    parts.push(`1m swing break ${direction} (fallback)`);
   }
   
   return parts.join(' + ');
