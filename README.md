@@ -296,7 +296,27 @@ DD_LIMIT=10  # Max drawdown % (default: 10)
 **In Supabase SQL Editor:**
 
 ```sql
--- Top 10 runs by score
+-- Verify strategy_runs table exists and has data
+SELECT 
+  id,
+  symbol,
+  start_ts,
+  end_ts,
+  status,
+  created_at,
+  completed_at,
+  results->>'trades' as trades,
+  results->>'winrate' as winrate,
+  results->>'total_pnl_pct' as pnl_pct,
+  results->>'max_drawdown_pct' as drawdown_pct,
+  results->>'profit_factor' as profit_factor,
+  results->>'expectancy_pct' as expectancy_pct,
+  config
+FROM strategy_runs
+ORDER BY created_at DESC
+LIMIT 20;
+
+-- Top 10 runs by expectancy score
 SELECT 
   id,
   symbol,
@@ -315,20 +335,54 @@ WHERE status = 'done'
 ORDER BY (results->>'expectancy_pct')::numeric DESC
 LIMIT 10;
 
+-- Verify strategy_trades table exists and has data
+SELECT 
+  id,
+  run_id,
+  symbol,
+  direction,
+  entry_ts,
+  entry_price,
+  stop_loss,
+  take_profit,
+  exit_ts,
+  exit_price,
+  exit_reason,
+  pnl_pct,
+  mfe,
+  mae
+FROM strategy_trades
+ORDER BY entry_ts DESC
+LIMIT 20;
+
 -- Trades for a specific run
 SELECT 
   direction,
   entry_ts,
   entry_price,
+  stop_loss,
+  take_profit,
   exit_ts,
   exit_price,
   exit_reason,
   pnl_pct,
-  mfe_pct,
-  mae_pct
+  mfe,
+  mae
 FROM strategy_trades
 WHERE run_id = 'YOUR_RUN_ID'
 ORDER BY entry_ts;
+
+-- Count trades per run
+SELECT 
+  run_id,
+  COUNT(*) as trade_count,
+  SUM(CASE WHEN pnl_pct > 0 THEN 1 ELSE 0 END) as wins,
+  SUM(CASE WHEN pnl_pct < 0 THEN 1 ELSE 0 END) as losses,
+  AVG(pnl_pct) as avg_pnl_pct,
+  SUM(pnl_pct) as total_pnl_pct
+FROM strategy_trades
+GROUP BY run_id
+ORDER BY total_pnl_pct DESC;
 ```
 
 #### 5. Backtest Metrics
