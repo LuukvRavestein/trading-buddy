@@ -1,6 +1,9 @@
 -- Migration 006: RPC function for efficient candle range fetching
 -- Alternative to REST pagination for very large datasets
 
+-- Drop old function signature if it exists (4 parameters)
+DROP FUNCTION IF EXISTS public.get_candles_range(text, int, timestamptz, timestamptz);
+
 -- Function: get_candles_range
 -- Returns candles for a symbol/timeframe within a time range, ordered by ts ascending
 -- Supports keyset pagination via p_after_ts and p_limit
