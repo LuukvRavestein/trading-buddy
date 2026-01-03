@@ -949,9 +949,9 @@ export async function insertStrategyTrade(trade) {
  * @returns {Promise<Array>} Array of candles
  */
 /**
- * Call RPC get_candles_range for a single time window
+ * Call RPC get_candles_range for a single page (keyset pagination)
  */
-async function getCandlesInRangeRPCSingle({ symbol, timeframeMin, startTs, endTs }) {
+async function getCandlesInRangeRPCSingle({ symbol, timeframeMin, startTs, endTs, limit, afterTs = null }) {
   if (!isSupabaseConfigured()) {
     return null;
   }
@@ -959,6 +959,19 @@ async function getCandlesInRangeRPCSingle({ symbol, timeframeMin, startTs, endTs
   try {
     const client = getSupabaseClient();
     const url = `${client.url}/rest/v1/rpc/get_candles_range`;
+    
+    const params = {
+      p_symbol: symbol,
+      p_timeframe_min: timeframeMin,
+      p_start_ts: startTs,
+      p_end_ts: endTs,
+      p_limit: limit,
+    };
+    
+    // Only include p_after_ts if it's not null
+    if (afterTs !== null) {
+      params.p_after_ts = afterTs;
+    }
     
     const response = await fetch(url, {
       method: 'POST',
@@ -968,12 +981,7 @@ async function getCandlesInRangeRPCSingle({ symbol, timeframeMin, startTs, endTs
         'Content-Type': 'application/json',
         'Prefer': 'return=representation',
       },
-      body: JSON.stringify({
-        p_symbol: symbol,
-        p_timeframe_min: timeframeMin,
-        p_start_ts: startTs,
-        p_end_ts: endTs,
-      }),
+      body: JSON.stringify(params),
     });
 
     if (!response.ok) {
@@ -991,9 +999,8 @@ async function getCandlesInRangeRPCSingle({ symbol, timeframeMin, startTs, endTs
 }
 
 /**
- * Get candles via RPC with time-slicing pagination
- * PostgREST limits RPC responses to 1000 rows, so we paginate by time windows
- * Each window is sized to return <= ROW_LIMIT candles
+ * Get candles via RPC with keyset pagination on ts
+ * Uses p_after_ts to paginate through all candles in the range
  */
 async function getCandlesInRangeRPC({ symbol, timeframeMin, startTs, endTs, batchLimit = 5000 }) {
   if (!isSupabaseConfigured()) {
@@ -1002,86 +1009,56 @@ async function getCandlesInRangeRPC({ symbol, timeframeMin, startTs, endTs, batc
 
   // PostgREST default row limit (can be overridden via env)
   const ROW_LIMIT = Number(process.env.SUPABASE_RPC_ROW_LIMIT ?? 1000);
-  const safeBatchLimit = Math.max(100, Math.min(ROW_LIMIT, batchLimit ?? ROW_LIMIT));
   
+  // Calculate expected count for validation
   const startMs = new Date(startTs).getTime();
   const endMs = new Date(endTs).getTime();
-  const tfMs = timeframeMin * 60 * 1000;
-  
-  // Calculate window size: safeBatchLimit candles * timeframe minutes
-  // This ensures each window returns <= ROW_LIMIT candles
-  const windowMinutes = safeBatchLimit * timeframeMin;
-  const windowMs = windowMinutes * 60 * 1000;
-  
-  // Overlap: small overlap to avoid missing candles at boundaries
-  const overlapMinutes = timeframeMin * 2; // 2 candles overlap
-  const overlapMs = overlapMinutes * 60 * 1000;
+  const minutesBetween = (endMs - startMs) / (60 * 1000);
+  const expectedCount = Math.floor(minutesBetween / timeframeMin);
   
   const allCandles = [];
-  let windowStartMs = startMs;
-  let windowCount = 0;
-  const seenTimestamps = new Set(); // For deduplication
-  let prevWindowEndMs = startMs; // Track previous window end for progress check
+  let afterTs = null;
+  let loops = 0;
+  const seenTimestamps = new Set(); // For deduplication (shouldn't be needed but safety)
   
-  console.log(`[supabase] RPC pagination: ${symbol} ${timeframeMin}m from ${startTs} to ${endTs}`, {
+  console.log(`[supabase] RPC keyset pagination: ${symbol} ${timeframeMin}m from ${startTs} to ${endTs}`, {
     ROW_LIMIT,
-    safeBatchLimit,
-    windowMinutes,
-    overlapMinutes,
+    expectedCount,
   });
   
-  while (windowStartMs < endMs) {
-    windowCount++;
-    const windowEndMs = Math.min(windowStartMs + windowMs, endMs);
-    const windowStartIso = new Date(windowStartMs).toISOString();
-    const windowEndIso = new Date(windowEndMs).toISOString();
+  while (true) {
+    loops++;
     
-    // Safety: prevent infinite loops if no progress
-    if (windowCount > 10000) {
-      console.warn(`[supabase] Stopped RPC pagination after 10000 windows (safety limit)`);
-      break;
+    // Safety: prevent infinite loops
+    if (loops > 200) {
+      throw new Error(`RPC pagination exceeded 200 loops (safety limit). Current total: ${allCandles.length}, expected: ~${expectedCount}`);
     }
     
-    // Check for no progress (window start hasn't advanced)
-    if (windowStartMs <= prevWindowEndMs && windowCount > 1) {
-      console.warn(`[supabase] No progress detected (windowStart ${new Date(windowStartMs).toISOString()} <= prev ${new Date(prevWindowEndMs).toISOString()}), forcing forward`);
-      windowStartMs = windowEndMs + tfMs;
-      continue;
+    // Safety: if we've fetched way more than expected, something is wrong
+    if (allCandles.length > expectedCount * 1.2) {
+      throw new Error(`RPC pagination fetched too many candles: ${allCandles.length} (expected ~${expectedCount}). Possible infinite loop.`);
     }
     
     try {
       const pageCandles = await getCandlesInRangeRPCSingle({
         symbol,
         timeframeMin,
-        startTs: windowStartIso,
-        endTs: windowEndIso,
+        startTs,
+        endTs,
+        limit: ROW_LIMIT,
+        afterTs,
       });
       
       if (pageCandles === null) {
-        // RPC failed for this window, move forward
-        console.warn(`[supabase] RPC failed for window ${windowStartIso} to ${windowEndIso}, moving forward`);
-        prevWindowEndMs = windowEndMs;
-        windowStartMs = windowEndMs - overlapMs + tfMs; // Advance with overlap
-        continue;
+        throw new Error(`RPC get_candles_range failed (returned null)`);
       }
       
       if (pageCandles.length === 0) {
-        // No candles in this window, move forward
-        prevWindowEndMs = windowEndMs;
-        windowStartMs = windowEndMs - overlapMs + tfMs;
-        continue;
+        // No more candles
+        break;
       }
       
-      // Check if we hit the row limit (PostgREST cap)
-      if (pageCandles.length >= ROW_LIMIT * 0.95) {
-        console.warn(`[supabase] RPC returned ${pageCandles.length} candles (close to ROW_LIMIT ${ROW_LIMIT}), may be truncated. Reducing window size.`);
-        // Reduce window size for next iteration to stay under limit
-        const reducedWindowMs = Math.max(tfMs * 100, windowMs * 0.8); // At least 100 candles
-        windowStartMs = windowEndMs - overlapMs;
-        // Note: we'll use smaller windows going forward, but for now continue with current logic
-      }
-      
-      // Deduplicate: filter out candles we've already seen
+      // Deduplicate by ts (shouldn't be needed with keyset pagination, but safety)
       const newCandles = pageCandles.filter(c => {
         const tsKey = `${c.ts}`;
         if (seenTimestamps.has(tsKey)) {
@@ -1093,39 +1070,43 @@ async function getCandlesInRangeRPC({ symbol, timeframeMin, startTs, endTs, batc
       
       allCandles.push(...newCandles);
       
-      // Update window start: advance by window end minus overlap
-      prevWindowEndMs = windowEndMs;
-      windowStartMs = windowEndMs - overlapMs;
-      
-      // Termination: if we've reached the end
-      if (windowEndMs >= endMs) {
+      // Check if we got fewer than ROW_LIMIT (last page)
+      if (pageCandles.length < ROW_LIMIT) {
         break;
       }
       
-      // Termination: if last candle is at or past end
-      if (pageCandles.length > 0) {
-        const lastCandle = pageCandles[pageCandles.length - 1];
-        const lastTsMs = new Date(lastCandle.ts).getTime();
-        if (lastTsMs >= endMs - tfMs) {
-          break;
-        }
+      // Get last candle timestamp for next iteration
+      const lastCandle = pageCandles[pageCandles.length - 1];
+      const lastTs = lastCandle.ts;
+      
+      // Progress check: ensure we're advancing
+      if (!lastTs) {
+        throw new Error(`RPC pagination: last candle has no ts field`);
       }
       
-      console.log(`[supabase] RPC window ${windowCount}: ${pageCandles.length} candles (${newCandles.length} new), total: ${allCandles.length}, window: ${windowStartIso} to ${windowEndIso}`);
+      if (afterTs !== null && lastTs === afterTs) {
+        throw new Error(`RPC pagination made no progress: lastTs (${lastTs}) == afterTs (${afterTs})`);
+      }
+      
+      // Update afterTs for next iteration
+      afterTs = lastTs;
+      
+      console.log(`[supabase] RPC page ${loops}: got ${pageCandles.length}, total ${allCandles.length}, lastTs ${lastTs}`);
       
     } catch (error) {
-      console.error(`[supabase] RPC pagination error on window ${windowCount}:`, error.message);
-      // Move window forward on error
-      prevWindowEndMs = windowEndMs;
-      windowStartMs = windowEndMs - overlapMs + tfMs;
-      continue;
+      // If it's a progress check error, throw it
+      if (error.message && (error.message.includes('no progress') || error.message.includes('exceeded'))) {
+        throw error;
+      }
+      console.error(`[supabase] RPC pagination error on page ${loops}:`, error.message);
+      throw error;
     }
   }
   
-  // Sort by timestamp ascending
+  // Sort by timestamp ascending (should already be sorted, but safety)
   allCandles.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
   
-  console.log(`[supabase] RPC pagination complete: ${symbol} ${timeframeMin}m: ${allCandles.length} total candles across ${windowCount} window(s)`);
+  console.log(`[supabase] RPC pagination complete: ${symbol} ${timeframeMin}m: ${allCandles.length} total candles across ${loops} page(s) (expected ~${expectedCount})`);
   
   return allCandles;
 }
