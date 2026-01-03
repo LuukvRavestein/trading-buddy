@@ -50,8 +50,9 @@ END;
 $$;
 
 -- Grant execute permission to service_role and authenticated
-GRANT EXECUTE ON FUNCTION public.get_candles_range(text, int, timestamptz, timestamptz) TO service_role;
-GRANT EXECUTE ON FUNCTION public.get_candles_range(text, int, timestamptz, timestamptz) TO authenticated;
+-- Note: Function signature includes new parameters (p_limit, p_after_ts) but grants work with any signature
+GRANT EXECUTE ON FUNCTION public.get_candles_range(text, int, timestamptz, timestamptz, integer, timestamptz) TO service_role;
+GRANT EXECUTE ON FUNCTION public.get_candles_range(text, int, timestamptz, timestamptz, integer, timestamptz) TO authenticated;
 
 -- Comment
 COMMENT ON FUNCTION public.get_candles_range IS 'Efficiently fetch candles for a symbol/timeframe within a time range. Returns ordered by ts ascending.';
