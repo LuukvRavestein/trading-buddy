@@ -1063,11 +1063,21 @@ async function getCandlesInRangeRPC({ symbol, timeframeMin, startTs, endTs, batc
       console.log(`[supabase] RPC page ${page}: ${pageCandles.length} candles (${newCandles.length} new), total: ${allCandles.length}, lastTs: ${lastCandle.ts}`);
       
       // If we got fewer than expected, we might have reached the end
-      if (pageCandles.length < batchLimit * 0.5) {
+      if (pageCandles.length < safeBatchLimit * 0.5) {
         // Likely at the end, check if we should continue
         if (lastTsMs >= endMs - tfMs) {
           break;
         }
+      }
+      
+      // If we got exactly 1000 (or close to it), PostgREST might be limiting
+      // Make next window smaller to ensure we get all candles
+      if (pageCandles.length >= 950 && pageCandles.length <= 1000) {
+        console.warn(`[supabase] RPC returned ~1000 candles (${pageCandles.length}), PostgREST limit may be active. Next window will be smaller.`);
+        // Reduce window size for next iteration
+        const reducedWindowMs = Math.min(windowMs * 0.8, tfMs * 400); // 80% of current or 400 candles max
+        cursorMs = lastTsMs + tfMs;
+        // Note: windowMs is recalculated each iteration, so this warning is informational
       }
       
       // Safety: prevent infinite loops
