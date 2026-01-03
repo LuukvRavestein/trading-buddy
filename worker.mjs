@@ -338,6 +338,64 @@ async function runBacktestMode() {
   }
 }
 
+// Store last run status for status endpoint
+let lastRunStatus = {
+  mode: null,
+  completedAt: null,
+  results: null,
+};
+
+/**
+ * Start HTTP server for backfill mode
+ */
+function startBackfillServer() {
+  const PORT = parseInt(process.env.PORT || '10000', 10);
+  
+  // Simple HTTP server using Node.js built-in http module
+  import('http').then((http) => {
+    const server = http.createServer((req, res) => {
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const path = url.pathname;
+      
+      // CORS headers
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Content-Type', 'application/json');
+      
+      if (path === '/health') {
+        res.writeHead(200);
+        res.end('ok');
+      } else if (path === '/status') {
+        res.writeHead(200);
+        res.end(JSON.stringify({
+          mode: lastRunStatus.mode,
+          completedAt: lastRunStatus.completedAt,
+          results: lastRunStatus.results,
+        }, null, 2));
+      } else {
+        res.writeHead(404);
+        res.end(JSON.stringify({ error: 'Not found' }));
+      }
+    });
+    
+    server.listen(PORT, () => {
+      log('info', 'Backfill HTTP server started', {
+        port: PORT,
+        endpoints: ['/health', '/status'],
+      });
+    });
+    
+    server.on('error', (error) => {
+      log('error', 'Backfill HTTP server error', {
+        error: error.message,
+      });
+    });
+  }).catch((error) => {
+    log('error', 'Failed to start HTTP server', {
+      error: error.message,
+    });
+  });
+}
+
 /**
  * Run backfill mode
  */
@@ -377,6 +435,21 @@ async function runBackfillMode() {
       overlapMinutes: BACKFILL_OVERLAP_MINUTES,
     });
     
+    // Store status for /status endpoint
+    lastRunStatus = {
+      mode: 'backfill',
+      completedAt: new Date().toISOString(),
+      results: Object.keys(results).reduce((acc, tf) => {
+        acc[tf] = {
+          totalFetched: results[tf].totalFetched,
+          totalUpserted: results[tf].totalUpserted,
+          batches: results[tf].batches,
+          lastCandleTs: results[tf].lastCandleTs,
+        };
+        return acc;
+      }, {}),
+    };
+    
     log('info', 'Backfill complete', {
       results: Object.keys(results).map(tf => {
         const r = results[tf];
@@ -384,13 +457,28 @@ async function runBackfillMode() {
       }).join(', '),
     });
     
-    return true; // Backfill mode completed
+    // Start HTTP server to keep process alive
+    startBackfillServer();
+    
+    return true; // Backfill mode completed (but process stays alive)
   } catch (error) {
     log('error', 'Backfill failed', {
       error: error.message,
       stack: error.stack,
     });
-    throw error;
+    
+    // Store error status
+    lastRunStatus = {
+      mode: 'backfill',
+      completedAt: new Date().toISOString(),
+      error: error.message,
+    };
+    
+    // Start HTTP server even on error to keep process alive
+    startBackfillServer();
+    
+    // Don't throw - keep process alive
+    return true;
   }
 }
 
@@ -406,8 +494,9 @@ async function runBackfillMode() {
   const isBackfillMode = await runBackfillMode();
   
   if (isBackfillMode) {
-    log('info', 'Backfill mode complete, exiting');
-    process.exit(0);
+    log('info', 'Backfill mode complete, HTTP server running to keep process alive');
+    // Don't exit - HTTP server keeps process alive
+    return;
   }
   
   // Run normal worker
