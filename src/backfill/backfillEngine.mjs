@@ -47,17 +47,20 @@ function sleep(ms) {
 async function backfillTimeframe({ symbol, timeframeMin, startTs, endTs, batchLimit, overlapMinutes }) {
   const startMs = new Date(startTs).getTime();
   const endMs = new Date(endTs).getTime();
+  const tfMs = timeframeMin * 60 * 1000; // Timeframe in milliseconds
+  const overlapMs = (overlapMinutes || (timeframeMin * 2)) * 60 * 1000;
   
   // Calculate window size: min(batchLimit * timeframe, 7 days)
   const maxWindowMinutes = 60 * 24 * 7; // 7 days max
   const windowMinutes = Math.min(batchLimit * timeframeMin, maxWindowMinutes);
   const windowMs = windowMinutes * 60 * 1000;
   
-  let cursor = startMs;
+  let cursorMs = startMs;
   let totalFetched = 0;
   let totalUpserted = 0;
   let batchCount = 0;
   let lastCandleTs = null;
+  let prevLastTsMs = 0; // Track previous last candle timestamp to detect no progress
   
   console.log(`[backfill] Starting ${timeframeMin}m backfill:`, {
     symbol,
@@ -65,24 +68,31 @@ async function backfillTimeframe({ symbol, timeframeMin, startTs, endTs, batchLi
     range: `${startTs} to ${endTs}`,
     windowMinutes,
     batchLimit,
-    overlapMinutes,
+    overlapMinutes: overlapMinutes || (timeframeMin * 2),
   });
   
-  while (cursor < endMs) {
+  while (cursorMs < endMs) {
     batchCount++;
     
-    // Calculate window end
-    const windowEnd = Math.min(cursor + windowMs, endMs);
-    const windowStartIso = new Date(cursor).toISOString();
-    const windowEndIso = new Date(windowEnd).toISOString();
+    // Calculate window with overlap (clamped to startMs to prevent going backwards)
+    const windowStartMs = Math.max(startMs, cursorMs - overlapMs);
+    const windowEndMs = Math.min(cursorMs + windowMs, endMs);
+    const windowStartIso = new Date(windowStartMs).toISOString();
+    const windowEndIso = new Date(windowEndMs).toISOString();
+    
+    // Termination check: if we've reached the last candle slot, break
+    if (cursorMs >= endMs - tfMs) {
+      console.log(`[backfill] ${timeframeMin}m: Reached end of range (cursor ${new Date(cursorMs).toISOString()} >= end - tf ${new Date(endMs - tfMs).toISOString()})`);
+      break;
+    }
     
     try {
-      // Fetch candles from Deribit
+      // Fetch candles from Deribit (use windowStart to include overlap)
       const candles = await getCandles({
         symbol,
         timeframeMin,
-        startTs: cursor,
-        endTs: windowEnd,
+        startTs: windowStartMs,
+        endTs: windowEndMs,
       });
       
       if (candles && candles.length > 0) {
@@ -96,24 +106,46 @@ async function backfillTimeframe({ symbol, timeframeMin, startTs, endTs, batchLi
         totalFetched += candles.length;
         totalUpserted += upsertedCount;
         
-        // Update cursor to last candle + timeframe (with overlap)
+        // Get last candle timestamp
         const lastCandle = candles[candles.length - 1];
         lastCandleTs = new Date(lastCandle.t).toISOString();
-        const lastCandleMs = lastCandle.t;
-        cursor = lastCandleMs + (timeframeMin * 60 * 1000) - (overlapMinutes * 60 * 1000);
+        const lastTsMs = lastCandle.t;
+        
+        // No-progress guard: if lastTsMs hasn't advanced, force cursor forward
+        if (lastTsMs <= prevLastTsMs) {
+          console.warn(`[backfill] ${timeframeMin}m batch ${batchCount}: no-progress guard triggered (lastTsMs ${new Date(lastTsMs).toISOString()} <= prev ${new Date(prevLastTsMs).toISOString()}), forcing cursor forward`);
+          cursorMs = windowEndMs + tfMs;
+        } else {
+          // Normal case: advance cursor to next candle slot
+          cursorMs = lastTsMs + tfMs;
+          prevLastTsMs = Math.max(prevLastTsMs, lastTsMs);
+        }
+        
+        // Termination check: if we've processed candles up to or past the end
+        if (lastTsMs >= endMs - tfMs) {
+          console.log(`[backfill] ${timeframeMin}m: Reached end of range (lastTs ${lastCandleTs} >= end - tf ${new Date(endMs - tfMs).toISOString()})`);
+          break;
+        }
         
         console.log(`[backfill] ${timeframeMin}m batch ${batchCount}:`, {
-          range: `${windowStartIso} to ${windowEndIso}`,
+          windowStart: windowStartIso,
+          windowEnd: windowEndIso,
+          cursor: new Date(cursorMs).toISOString(),
           fetched: candles.length,
           upserted: upsertedCount,
           lastTs: lastCandleTs,
-          cursor: new Date(cursor).toISOString(),
           cumulative: { fetched: totalFetched, upserted: totalUpserted },
         });
       } else {
         // No candles returned - move cursor forward by window size
         console.log(`[backfill] ${timeframeMin}m batch ${batchCount}: No candles in range ${windowStartIso} to ${windowEndIso}, moving forward`);
-        cursor = windowEnd + (timeframeMin * 60 * 1000);
+        cursorMs = windowEndMs + tfMs;
+        
+        // Termination check after empty response
+        if (cursorMs > endMs) {
+          console.log(`[backfill] ${timeframeMin}m: Cursor past end (${new Date(cursorMs).toISOString()} > ${new Date(endMs).toISOString()})`);
+          break;
+        }
       }
       
       // Rate limiting: small delay between calls
@@ -123,7 +155,13 @@ async function backfillTimeframe({ symbol, timeframeMin, startTs, endTs, batchLi
       console.error(`[backfill] Error in ${timeframeMin}m batch ${batchCount}:`, error.message);
       
       // On error, move cursor forward to avoid infinite loop
-      cursor = windowEnd + (timeframeMin * 60 * 1000);
+      cursorMs = windowEndMs + tfMs;
+      
+      // Termination check after error
+      if (cursorMs > endMs) {
+        console.log(`[backfill] ${timeframeMin}m: Cursor past end after error, stopping`);
+        break;
+      }
       
       // Continue with next batch
       continue;
