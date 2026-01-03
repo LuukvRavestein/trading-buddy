@@ -28,6 +28,7 @@ import { saveProposal } from './src/strategy/proposalWriter.mjs';
 import { runPaperEngine } from './src/paper/paperEngine.mjs';
 import { runOptimizer } from './src/backtest/optimizer.mjs';
 import { runBackfill } from './src/backfill/backfillEngine.mjs';
+import http from 'http';
 
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const POLL_INTERVAL_SECONDS = parseInt(process.env.POLL_INTERVAL_SECONDS || '60', 10);
@@ -351,46 +352,46 @@ let lastRunStatus = {
 function startBackfillServer() {
   const PORT = parseInt(process.env.PORT || '10000', 10);
   
-  // Simple HTTP server using Node.js built-in http module
-  import('http').then((http) => {
-    const server = http.createServer((req, res) => {
-      const url = new URL(req.url, `http://${req.headers.host}`);
-      const path = url.pathname;
-      
-      // CORS headers
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Content-Type', 'application/json');
-      
-      if (path === '/health') {
-        res.writeHead(200);
-        res.end('ok');
-      } else if (path === '/status') {
-        res.writeHead(200);
-        res.end(JSON.stringify({
-          mode: lastRunStatus.mode,
-          completedAt: lastRunStatus.completedAt,
-          results: lastRunStatus.results,
-        }, null, 2));
-      } else {
-        res.writeHead(404);
-        res.end(JSON.stringify({ error: 'Not found' }));
-      }
-    });
+  const server = http.createServer((req, res) => {
+    let url;
+    try {
+      url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    } catch (e) {
+      res.writeHead(400);
+      res.end(JSON.stringify({ error: 'Invalid URL' }));
+      return;
+    }
     
-    server.listen(PORT, () => {
-      log('info', 'Backfill HTTP server started', {
-        port: PORT,
-        endpoints: ['/health', '/status'],
-      });
-    });
+    const path = url.pathname;
     
-    server.on('error', (error) => {
-      log('error', 'Backfill HTTP server error', {
-        error: error.message,
-      });
+    // CORS headers
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    
+    if (path === '/health') {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('ok');
+    } else if (path === '/status') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        mode: lastRunStatus.mode,
+        completedAt: lastRunStatus.completedAt,
+        results: lastRunStatus.results,
+      }, null, 2));
+    } else {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Not found' }));
+    }
+  });
+  
+  server.listen(PORT, () => {
+    log('info', 'Backfill HTTP server started', {
+      port: PORT,
+      endpoints: ['/health', '/status'],
     });
-  }).catch((error) => {
-    log('error', 'Failed to start HTTP server', {
+  });
+  
+  server.on('error', (error) => {
+    log('error', 'Backfill HTTP server error', {
       error: error.message,
     });
   });
