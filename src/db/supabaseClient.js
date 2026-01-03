@@ -1003,10 +1003,11 @@ async function getCandlesInRangeRPC({ symbol, timeframeMin, startTs, endTs, batc
   const endMs = new Date(endTs).getTime();
   const tfMs = timeframeMin * 60 * 1000;
   
-  // Calculate window size: batchLimit candles * timeframe minutes
-  // Cap at 7 days to avoid very large windows
-  const maxWindowMinutes = 60 * 24 * 7;
-  const windowMinutes = Math.min(batchLimit * timeframeMin, maxWindowMinutes);
+  // Calculate window size: use conservative limit to stay under PostgREST 1000 row limit
+  // Use 800 candles max per window to be safe (PostgREST default is often 1000)
+  const safeBatchLimit = Math.min(batchLimit, 800);
+  const maxWindowMinutes = 60 * 24 * 7; // Cap at 7 days
+  const windowMinutes = Math.min(safeBatchLimit * timeframeMin, maxWindowMinutes);
   const windowMs = windowMinutes * 60 * 1000;
   
   const allCandles = [];
