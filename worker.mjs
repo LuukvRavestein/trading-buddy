@@ -408,6 +408,7 @@ async function runBackfillMode() {
   const BACKFILL_TIMEFRAMES = (process.env.BACKFILL_TIMEFRAMES || '1,5,15,60').split(',').map(t => parseInt(t.trim(), 10));
   const BACKFILL_BATCH_LIMIT = parseInt(process.env.BACKFILL_BATCH_LIMIT || '5000', 10);
   const BACKFILL_OVERLAP_MINUTES = process.env.BACKFILL_OVERLAP_MINUTES ? parseInt(process.env.BACKFILL_OVERLAP_MINUTES, 10) : null;
+  const WARMUP_DAYS = parseInt(process.env.WARMUP_DAYS || '1', 10);
   
   if (!BACKFILL_MODE) {
     return false; // Not in backfill mode
@@ -417,9 +418,16 @@ async function runBackfillMode() {
     throw new Error('BACKFILL_MODE=1 requires BACKFILL_START_TS and BACKFILL_END_TS environment variables');
   }
   
+  // Calculate effective start (with warmup period)
+  const startDate = new Date(BACKFILL_START_TS);
+  const effectiveStartDate = new Date(startDate.getTime() - WARMUP_DAYS * 24 * 60 * 60 * 1000);
+  const effectiveStartTs = effectiveStartDate.toISOString();
+  
   log('info', 'Running in BACKFILL_MODE', {
     symbol: BACKFILL_SYMBOL,
     startTs: BACKFILL_START_TS,
+    effectiveStartTs,
+    warmupDays: WARMUP_DAYS,
     endTs: BACKFILL_END_TS,
     timeframes: BACKFILL_TIMEFRAMES,
     batchLimit: BACKFILL_BATCH_LIMIT,
@@ -429,7 +437,7 @@ async function runBackfillMode() {
   try {
     const results = await runBackfill({
       symbol: BACKFILL_SYMBOL,
-      startTs: BACKFILL_START_TS,
+      startTs: effectiveStartTs, // Use effective start (with warmup)
       endTs: BACKFILL_END_TS,
       timeframes: BACKFILL_TIMEFRAMES,
       batchLimit: BACKFILL_BATCH_LIMIT,

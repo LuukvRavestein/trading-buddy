@@ -37,9 +37,9 @@ export async function runBacktest({ symbol, startTs, endTs, config }) {
     const lookbackHours = 24; // Load 24h before start for state initialization
     const lookbackStart = new Date(new Date(startTs).getTime() - lookbackHours * 60 * 60 * 1000).toISOString();
     
-    console.log(`[backtest] Loading candles from ${lookbackStart} to ${endTs}`);
+    console.log(`[backtest] Loading candles from ${lookbackStart} to ${endTs} (lookback: ${lookbackHours}h before startTs)`);
     
-    // Calculate expected counts for validation (using lookback range)
+    // Calculate expected counts for validation (using actual load range: lookbackStart to endTs)
     const lookbackStartMs = new Date(lookbackStart).getTime();
     const lookbackEndMs = new Date(endTs).getTime();
     const minutesBetween = (lookbackEndMs - lookbackStartMs) / (60 * 1000);
@@ -50,7 +50,7 @@ export async function runBacktest({ symbol, startTs, endTs, config }) {
       60: Math.floor(minutesBetween / 60),
     };
     
-    console.log(`[backtest] Expected candle counts: 1m≈${expectedCounts[1]}, 5m≈${expectedCounts[5]}, 15m≈${expectedCounts[15]}, 60m≈${expectedCounts[60]}`);
+    console.log(`[backtest] Expected candle counts (range: ${lookbackStart} to ${endTs}): 1m≈${expectedCounts[1]}, 5m≈${expectedCounts[5]}, 15m≈${expectedCounts[15]}, 60m≈${expectedCounts[60]}`);
     
     const [candles1m, candles5m, candles15m, candles60m] = await Promise.all([
       getCandlesInRange({ symbol, timeframeMin: 1, startTs: lookbackStart, endTs }),
