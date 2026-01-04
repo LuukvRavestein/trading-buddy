@@ -66,6 +66,7 @@ async function backfillTimeframe({ symbol, timeframeMin, startTs, endTs, batchLi
     symbol,
     timeframeMin,
     range: `${startTs} to ${endTs}`,
+    rangeMinutes: Math.round((new Date(endTs).getTime() - new Date(startTs).getTime()) / (60 * 1000)),
     windowMinutes,
     batchLimit,
     overlapMinutes: overlapMinutes || (timeframeMin * 2),

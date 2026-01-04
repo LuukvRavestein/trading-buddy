@@ -28,6 +28,7 @@ import { saveProposal } from './src/strategy/proposalWriter.mjs';
 import { runPaperEngine } from './src/paper/paperEngine.mjs';
 import { runOptimizer } from './src/backtest/optimizer.mjs';
 import { runBackfill } from './src/backfill/backfillEngine.mjs';
+import { subtractDaysISO } from './src/utils/time.mjs';
 import http from 'http';
 
 const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
@@ -408,7 +409,6 @@ async function runBackfillMode() {
   const BACKFILL_TIMEFRAMES = (process.env.BACKFILL_TIMEFRAMES || '1,5,15,60').split(',').map(t => parseInt(t.trim(), 10));
   const BACKFILL_BATCH_LIMIT = parseInt(process.env.BACKFILL_BATCH_LIMIT || '5000', 10);
   const BACKFILL_OVERLAP_MINUTES = process.env.BACKFILL_OVERLAP_MINUTES ? parseInt(process.env.BACKFILL_OVERLAP_MINUTES, 10) : null;
-  const WARMUP_DAYS = parseInt(process.env.WARMUP_DAYS || '1', 10);
   
   if (!BACKFILL_MODE) {
     return false; // Not in backfill mode
@@ -418,16 +418,25 @@ async function runBackfillMode() {
     throw new Error('BACKFILL_MODE=1 requires BACKFILL_START_TS and BACKFILL_END_TS environment variables');
   }
   
-  // Calculate effective start (with warmup period)
-  const startDate = new Date(BACKFILL_START_TS);
-  const effectiveStartDate = new Date(startDate.getTime() - WARMUP_DAYS * 24 * 60 * 60 * 1000);
-  const effectiveStartTs = effectiveStartDate.toISOString();
+  // Validate and compute warmup days
+  let warmupDays = parseInt(process.env.WARMUP_DAYS ?? '1', 10);
+  if (isNaN(warmupDays) || warmupDays < 0 || warmupDays > 30) {
+    log('warn', 'Invalid WARMUP_DAYS, using default', {
+      provided: process.env.WARMUP_DAYS,
+      defaultValue: 1,
+    });
+    warmupDays = 1;
+  }
   
-  log('info', 'Running in BACKFILL_MODE', {
+  // Calculate effective start (with warmup period) using helper
+  const effectiveStartTs = subtractDaysISO(BACKFILL_START_TS, warmupDays);
+  
+  // ALWAYS log this structured line when BACKFILL_MODE starts
+  log('info', 'BACKFILL_MODE starting with warmup', {
     symbol: BACKFILL_SYMBOL,
     startTs: BACKFILL_START_TS,
     effectiveStartTs,
-    warmupDays: WARMUP_DAYS,
+    warmupDays,
     endTs: BACKFILL_END_TS,
     timeframes: BACKFILL_TIMEFRAMES,
     batchLimit: BACKFILL_BATCH_LIMIT,
@@ -437,7 +446,7 @@ async function runBackfillMode() {
   try {
     const results = await runBackfill({
       symbol: BACKFILL_SYMBOL,
-      startTs: effectiveStartTs, // Use effective start (with warmup)
+      startTs: effectiveStartTs, // Use effective start (with warmup) - this is the actual range
       endTs: BACKFILL_END_TS,
       timeframes: BACKFILL_TIMEFRAMES,
       batchLimit: BACKFILL_BATCH_LIMIT,
