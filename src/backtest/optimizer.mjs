@@ -150,15 +150,6 @@ export async function runOptimizer({ symbol, startTs, endTs }) {
     r.metrics && r.metrics.max_drawdown_pct <= DD_LIMIT
   );
   
-  // Update optimizer run with final counts
-  if (optimizerRunId) {
-    try {
-      await updateOptimizerRun(optimizerRunId, results.length, validResults.length);
-    } catch (error) {
-      console.warn(`[optimizer] Failed to update optimizer run counts (continuing):`, error.message);
-    }
-  }
-  
   // Sort by primary score (descending)
   validResults.sort((a, b) => b.primaryScore - a.primaryScore);
   
@@ -174,12 +165,34 @@ export async function runOptimizer({ symbol, startTs, endTs }) {
     console.log(`[optimizer]    Config: ${JSON.stringify(result.config)}`);
   });
   
+  // Update optimizer run with final counts
+  if (optimizerRunId) {
+    console.log(`[optimizer] Updating optimizer run ${optimizerRunId} with counts: total=${results.length}, valid=${validResults.length}`);
+    try {
+      await updateOptimizerRun(optimizerRunId, results.length, validResults.length);
+      console.log(`[optimizer] ✓ Successfully updated optimizer run ${optimizerRunId}`);
+    } catch (error) {
+      console.error(`[optimizer] ✗ Failed to update optimizer run counts:`, error);
+    }
+  } else {
+    console.warn(`[optimizer] Cannot update optimizer run: optimizerRunId is null`);
+  }
+  
   // Save top 10 configs to database
   if (optimizerRunId && top10.length > 0) {
+    console.log(`[optimizer] Saving ${top10.length} top configs to database for run ${optimizerRunId}`);
     try {
       await saveOptimizerTopConfigs(optimizerRunId, top10);
+      console.log(`[optimizer] ✓ Successfully saved ${top10.length} top configs for run ${optimizerRunId}`);
     } catch (error) {
-      console.warn(`[optimizer] Failed to save top configs (continuing):`, error.message);
+      console.error(`[optimizer] ✗ Failed to save top configs:`, error);
+    }
+  } else {
+    if (!optimizerRunId) {
+      console.warn(`[optimizer] Cannot save top configs: optimizerRunId is null`);
+    }
+    if (top10.length === 0) {
+      console.warn(`[optimizer] Cannot save top configs: top10 array is empty`);
     }
   }
   
