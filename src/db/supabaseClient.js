@@ -1427,40 +1427,63 @@ export async function saveOptimizerAllConfigs(runId, validResults) {
  * @returns {Promise<void>}
  */
 export async function saveOptimizerOOSResults(runId, oosResults) {
-  if (!isSupabaseConfigured() || !runId) {
-    console.warn('[supabase] Cannot save OOS results: Supabase not configured or no runId');
+  if (!isSupabaseConfigured()) {
+    console.warn('[supabase] Cannot save OOS results: Supabase not configured');
+    return;
+  }
+
+  if (!runId) {
+    console.warn('[supabase] Cannot save OOS results: runId is null or undefined');
     return;
   }
 
   if (!oosResults || oosResults.length === 0) {
-    console.warn('[supabase] No OOS results to save');
+    console.warn('[supabase] Cannot save OOS results: oosResults array is empty or null');
     return;
   }
 
   try {
-    const rows = oosResults.map(item => ({
-      run_id: runId,
-      rank: item.rank,
-      symbol: item.symbol,
-      test_start_ts: item.test_start_ts,
-      test_end_ts: item.test_end_ts,
-      score: item.metrics.expectancy_pct || item.primaryScore || 0,
-      trades: item.metrics.trades,
-      winrate: item.metrics.winrate,
-      pnl: item.metrics.total_pnl_pct,
-      dd: item.metrics.max_drawdown_pct,
-      pf: item.metrics.profit_factor,
-      config: item.config,
-    }));
+    console.log(`[supabase] Preparing to save ${oosResults.length} OOS results for run ${runId}`);
+    
+    const rows = oosResults.map((item, idx) => {
+      if (!item.metrics) {
+        throw new Error(`OOS result at index ${idx} (rank ${item.rank}) has no metrics`);
+      }
+      return {
+        run_id: runId,
+        rank: item.rank,
+        symbol: item.symbol,
+        test_start_ts: item.test_start_ts,
+        test_end_ts: item.test_end_ts,
+        score: item.metrics.expectancy_pct || item.primaryScore || 0,
+        trades: item.metrics.trades,
+        winrate: item.metrics.winrate,
+        pnl: item.metrics.total_pnl_pct,
+        dd: item.metrics.max_drawdown_pct,
+        pf: item.metrics.profit_factor,
+        config: item.config,
+      };
+    });
 
+    console.log(`[supabase] Inserting ${rows.length} rows into optimizer_oos_results`);
+    
     // Insert in batch
     const result = await supabaseRequest('POST', 'optimizer_oos_results', rows, {
       select: '*',
     });
     
-    console.log(`[supabase] Saved ${rows.length} OOS results for run ${runId}`);
+    console.log(`[supabase] ✓ Successfully saved ${rows.length} OOS results for run ${runId}`);
+    if (result && result.length > 0) {
+      console.log(`[supabase] Database returned ${result.length} rows (expected ${rows.length})`);
+    }
   } catch (error) {
-    console.error('[supabase] Failed to save optimizer OOS results:', error.message);
+    console.error('[supabase] ✗ Failed to save optimizer OOS results:', error);
+    console.error('[supabase] Error details:', {
+      runId,
+      oosResultsLength: oosResults?.length,
+      errorMessage: error.message,
+      errorStack: error.stack,
+    });
     // Don't throw - optimizer should continue
   }
 }

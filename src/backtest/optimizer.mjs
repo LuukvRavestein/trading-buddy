@@ -206,11 +206,28 @@ export async function runOptimizer({ symbol, startTs, endTs }) {
   }
   
   // Run out-of-sample backtests for top N configs
+  // Always run OOS tests if we have a runId and top configs
   if (optimizerRunId && top10.length > 0) {
+    console.log(`[optimizer] Starting OOS backtests for top configs (runId: ${optimizerRunId})`);
     try {
       await runOutOfSampleTests({ symbol, trainEndTs: endTs, top10, optimizerRunId });
+      console.log(`[optimizer] ✓ OOS backtests completed successfully`);
     } catch (error) {
-      console.warn(`[optimizer] Failed to run OOS tests (continuing):`, error.message);
+      console.error(`[optimizer] ✗ Failed to run OOS tests:`, error);
+      console.error(`[optimizer] Error details:`, {
+        errorMessage: error.message,
+        errorStack: error.stack,
+        optimizerRunId,
+        top10Length: top10.length,
+      });
+      // Don't throw - continue even if OOS fails
+    }
+  } else {
+    if (!optimizerRunId) {
+      console.warn(`[optimizer] ⚠ Skipping OOS tests: optimizerRunId is null`);
+    }
+    if (top10.length === 0) {
+      console.warn(`[optimizer] ⚠ Skipping OOS tests: top10 array is empty`);
     }
   }
   
@@ -250,6 +267,20 @@ function calculatePrimaryScore(metrics) {
  * @returns {Promise<void>}
  */
 async function runOutOfSampleTests({ symbol, trainEndTs, top10, optimizerRunId }) {
+  // Validate inputs
+  if (!optimizerRunId) {
+    throw new Error('runOutOfSampleTests: optimizerRunId is required');
+  }
+  if (!top10 || top10.length === 0) {
+    throw new Error('runOutOfSampleTests: top10 array is empty');
+  }
+  if (!symbol) {
+    throw new Error('runOutOfSampleTests: symbol is required');
+  }
+  if (!trainEndTs) {
+    throw new Error('runOutOfSampleTests: trainEndTs is required');
+  }
+  
   // Determine OOS range
   let oosStartTs, oosEndTs;
   
@@ -257,21 +288,25 @@ async function runOutOfSampleTests({ symbol, trainEndTs, top10, optimizerRunId }
     // Use explicit OOS range
     oosStartTs = normalizeISO(process.env.OOS_START_TS);
     oosEndTs = normalizeISO(process.env.OOS_END_TS);
+    console.log(`[optimizer] Using explicit OOS range: ${oosStartTs} to ${oosEndTs}`);
   } else {
     // Calculate OOS range: start 1 minute after trainEndTs, end after OOS_DAYS days
     const oosDays = parseInt(process.env.OOS_DAYS || '7', 10);
     oosStartTs = addMinutesISO(normalizeISO(trainEndTs), 1);
     const oosEndDate = addDaysISO(oosStartTs, oosDays);
     oosEndTs = setEndOfDayISO(oosEndDate);
+    console.log(`[optimizer] Calculated OOS range: ${oosStartTs} to ${oosEndTs} (${oosDays} days after training)`);
   }
   
   const topN = parseInt(process.env.OOS_TOP_N || '3', 10);
   const configsToTest = top10.slice(0, Math.min(topN, top10.length));
   
-  console.log(`[optimizer] Running OOS tests for top ${configsToTest.length} configs:`, {
+  console.log(`[optimizer] Running OOS tests for top ${configsToTest.length} configs (OOS_TOP_N=${topN}):`, {
+    optimizerRunId,
+    symbol,
     oosStartTs,
     oosEndTs,
-    symbol,
+    configsToTest: configsToTest.length,
   });
   
   const oosResults = [];
@@ -279,6 +314,11 @@ async function runOutOfSampleTests({ symbol, trainEndTs, top10, optimizerRunId }
   for (let i = 0; i < configsToTest.length; i++) {
     const configItem = configsToTest[i];
     const rank = i + 1;
+    
+    if (!configItem.metrics) {
+      console.error(`[optimizer] ⚠ Config at rank ${rank} has no metrics, skipping OOS test`);
+      continue;
+    }
     
     console.log(`[optimizer] OOS test ${i + 1}/${configsToTest.length} (rank ${rank}):`, {
       config: configItem.config,
@@ -311,25 +351,72 @@ async function runOutOfSampleTests({ symbol, trainEndTs, top10, optimizerRunId }
         primaryScore: oosPrimaryScore,
       });
       
-      // Log comparison
+      // Calculate stability indicators
+      const trainPnl = configItem.metrics.total_pnl_pct;
+      const trainDd = configItem.metrics.max_drawdown_pct;
+      const oosPnl = oosMetrics.total_pnl_pct;
+      const oosDd = oosMetrics.max_drawdown_pct;
+      
+      // Stability warnings
+      const stabilityWarnings = [];
+      if (oosPnl < 0) {
+        stabilityWarnings.push(`OOS PnL is negative (${oosPnl.toFixed(2)}%)`);
+      }
+      if (oosDd > trainDd) {
+        stabilityWarnings.push(`OOS DD (${oosDd.toFixed(2)}%) exceeds train DD (${trainDd.toFixed(2)}%)`);
+      }
+      
+      // Log comparison with stability warnings
       console.log(`[optimizer] OOS test ${i + 1} complete (rank ${rank}):`);
-      console.log(`[optimizer]   Train: PnL=${configItem.metrics.total_pnl_pct.toFixed(2)}%, DD=${configItem.metrics.max_drawdown_pct.toFixed(2)}%, PF=${configItem.metrics.profit_factor.toFixed(2)}, Trades=${configItem.metrics.trades}`);
-      console.log(`[optimizer]   OOS:   PnL=${oosMetrics.total_pnl_pct.toFixed(2)}%, DD=${oosMetrics.max_drawdown_pct.toFixed(2)}%, PF=${oosMetrics.profit_factor.toFixed(2)}, Trades=${oosMetrics.trades}`);
+      console.log(`[optimizer]   Train: PnL=${trainPnl.toFixed(2)}%, DD=${trainDd.toFixed(2)}%, PF=${configItem.metrics.profit_factor.toFixed(2)}, Trades=${configItem.metrics.trades}`);
+      console.log(`[optimizer]   OOS:   PnL=${oosPnl.toFixed(2)}%, DD=${oosDd.toFixed(2)}%, PF=${oosMetrics.profit_factor.toFixed(2)}, Trades=${oosMetrics.trades}`);
+      
+      if (stabilityWarnings.length > 0) {
+        console.warn(`[optimizer]   ⚠ STABILITY WARNING (rank ${rank}): ${stabilityWarnings.join('; ')}`);
+      } else {
+        console.log(`[optimizer]   ✓ Stability check passed (rank ${rank})`);
+      }
     } catch (error) {
-      console.error(`[optimizer] OOS test ${i + 1} (rank ${rank}) failed:`, error.message);
+      console.error(`[optimizer] ✗ OOS test ${i + 1} (rank ${rank}) failed:`, error);
+      console.error(`[optimizer] Error details:`, {
+        rank,
+        config: configItem.config,
+        errorMessage: error.message,
+        errorStack: error.stack,
+      });
       // Continue with other configs
     }
   }
   
   // Save OOS results
   if (optimizerRunId && oosResults.length > 0) {
+    console.log(`[optimizer] Saving ${oosResults.length} OOS results to database for run ${optimizerRunId}`);
     try {
       await saveOptimizerOOSResults(optimizerRunId, oosResults);
+      console.log(`[optimizer] ✓ Successfully saved ${oosResults.length} OOS results for run ${optimizerRunId}`);
     } catch (error) {
-      console.warn(`[optimizer] Failed to save OOS results (continuing):`, error.message);
+      console.error(`[optimizer] ✗ Failed to save OOS results:`, error);
+      console.error(`[optimizer] Error details:`, {
+        optimizerRunId,
+        oosResultsCount: oosResults.length,
+        errorMessage: error.message,
+        errorStack: error.stack,
+      });
+      // Don't throw - continue even if save fails
+    }
+  } else {
+    if (!optimizerRunId) {
+      console.warn(`[optimizer] ⚠ Cannot save OOS results: optimizerRunId is null`);
+    }
+    if (oosResults.length === 0) {
+      console.warn(`[optimizer] ⚠ Cannot save OOS results: no successful OOS tests (${configsToTest.length} attempted)`);
     }
   }
   
-  console.log(`[optimizer] OOS testing complete: ${oosResults.length}/${configsToTest.length} configs tested`);
+  console.log(`[optimizer] OOS testing complete: ${oosResults.length}/${configsToTest.length} configs tested successfully`);
+  
+  if (oosResults.length === 0) {
+    console.warn(`[optimizer] ⚠ No OOS results to save - all tests failed or no configs tested`);
+  }
 }
 
