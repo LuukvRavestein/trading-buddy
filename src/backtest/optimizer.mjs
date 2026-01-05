@@ -8,6 +8,10 @@ import { runBacktest } from './backtestEngine.mjs';
 import { createOptimizerRun, updateOptimizerRun, saveOptimizerTopConfigs, saveOptimizerAllConfigs, saveOptimizerOOSResults } from '../db/supabaseClient.js';
 import { addMinutesISO, addDaysISO, setEndOfDayISO, normalizeISO } from '../utils/time.mjs';
 
+// BUILD_FINGERPRINT: Version with DB saving enabled
+const BUILD_FINGERPRINT = 'optimizer-v2-db-saving-2025-01-01';
+console.log(`[optimizer] BUILD_FINGERPRINT: ${BUILD_FINGERPRINT}`);
+
 const DD_LIMIT = parseFloat(process.env.DD_LIMIT || '10', 10); // Default 10% max drawdown
 
 /**
@@ -94,21 +98,35 @@ export async function runOptimizer({ symbol, startTs, endTs }) {
   console.log(`[optimizer] Max drawdown limit: ${DD_LIMIT}%`);
   
   // Create optimizer run record
+  const trainStartTs = normalizeISO(startTs);
+  const trainEndTs = normalizeISO(endTs);
+  
   let optimizerRunId = null;
   try {
-    const run = await createOptimizerRun({
+    const { data, error } = await createOptimizerRun({
       symbol,
-      train_start_ts: normalizeISO(startTs),
-      train_end_ts: normalizeISO(endTs),
+      train_start_ts: trainStartTs,
+      train_end_ts: trainEndTs,
       dd_limit: DD_LIMIT,
       total_configs: 0, // Will update after configs are generated
       valid_configs: 0, // Will update after filtering
     });
-    optimizerRunId = run.id;
+    
+    if (error) {
+      throw error;
+    }
+    
+    optimizerRunId = data?.id;
     if (!optimizerRunId) {
       throw new Error('createOptimizerRun returned null run_id');
     }
-    console.log(`[optimizer] ✓ Created optimizer run: run_id=${optimizerRunId}`);
+    
+    console.log(`[optimizer][db] created run: ${optimizerRunId}`, {
+      train_start_ts: trainStartTs,
+      train_end_ts: trainEndTs,
+      symbol,
+      dd_limit: DD_LIMIT,
+    });
   } catch (error) {
     console.error(`[optimizer] ✗ Failed to create optimizer run:`, error);
     throw error; // Fail fast if we can't create the run
@@ -191,17 +209,28 @@ export async function runOptimizer({ symbol, startTs, endTs }) {
   }
   console.log(`[optimizer] Using run_id=${optimizerRunId} for all DB operations`);
   
-  // Update optimizer run with final counts
-  console.log(`[optimizer] Updating optimizer run run_id=${optimizerRunId} with counts: total=${results.length}, valid=${validResults.length}`);
+  // Update optimizer run with final counts - ALWAYS execute, even if validResults is 0
+  const totalConfigs = results.length;
+  const validConfigs = validResults.length;
+  console.log(`[optimizer] Updating optimizer run run_id=${optimizerRunId} with counts:`, {
+    total_configs: totalConfigs,
+    valid_configs: validConfigs,
+  });
+  
   try {
-    await updateOptimizerRun(optimizerRunId, results.length, validResults.length);
-    console.log(`[optimizer] ✓ Successfully updated optimizer run run_id=${optimizerRunId}`);
+    const { data, error } = await updateOptimizerRun(optimizerRunId, totalConfigs, validConfigs);
+    if (error) {
+      throw error;
+    }
+    console.log(`[optimizer][db] updated run counts: total=${totalConfigs} valid=${validConfigs}`, {
+      returnedData: data,
+    });
   } catch (error) {
     console.error(`[optimizer] ✗ Failed to update optimizer run counts:`, error);
     throw error; // Fail fast
   }
   
-  // Save top 10 configs to database
+  // Save top 10 configs to database - execute when top10.length > 0
   if (top10.length === 0) {
     console.warn(`[optimizer] ⚠ Skipping saveOptimizerTopConfigs: top10 array is empty`);
   } else {
@@ -212,9 +241,16 @@ export async function runOptimizer({ symbol, startTs, endTs }) {
       firstItemHasPrimaryScore: top10[0]?.primaryScore !== undefined,
       firstItemHasConfig: top10[0]?.config ? true : false,
     });
+    
     try {
-      await saveOptimizerTopConfigs(optimizerRunId, top10);
-      console.log(`[optimizer] ✓ Successfully saved ${top10.length} top configs for run_id=${optimizerRunId}`);
+      const { data, error } = await saveOptimizerTopConfigs(optimizerRunId, top10);
+      if (error) {
+        throw error;
+      }
+      console.log(`[optimizer][db] saved top configs: ${top10.length}`, {
+        returnedRows: data?.length || 0,
+        sampleRow: data?.[0] || null,
+      });
     } catch (error) {
       console.error(`[optimizer] ✗ Failed to save top configs:`, error);
       throw error; // Fail fast
@@ -429,9 +465,16 @@ async function runOutOfSampleTests({ symbol, trainEndTs, top10, optimizerRunId }
       firstItemHasConfig: oosResults[0]?.config ? true : false,
       firstItemSymbol: oosResults[0]?.symbol,
     });
+    
     try {
-      await saveOptimizerOOSResults(optimizerRunId, oosResults);
-      console.log(`[optimizer] ✓ Successfully saved ${oosResults.length} OOS results for run_id=${optimizerRunId}`);
+      const { data, error } = await saveOptimizerOOSResults(optimizerRunId, oosResults);
+      if (error) {
+        throw error;
+      }
+      console.log(`[optimizer][db] saved OOS results: ${oosResults.length}`, {
+        returnedRows: data?.length || 0,
+        sampleRow: data?.[0] || null,
+      });
     } catch (error) {
       console.error(`[optimizer] ✗ Failed to save OOS results:`, error);
       throw error; // Fail fast
