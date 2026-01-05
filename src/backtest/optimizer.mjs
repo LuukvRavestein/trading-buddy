@@ -499,19 +499,16 @@ async function runOutOfSampleTests({ symbol, trainEndTs, top10, optimizerRunId }
   
   // Save OOS results
   if (!optimizerRunId) {
-    throw new Error('Cannot save OOS results: optimizerRunId is null');
+    console.warn(`[optimizer] ⚠ Cannot save OOS results: optimizerRunId is null`);
+    return;
   }
   
   if (oosResults.length === 0) {
     console.warn(`[optimizer] ⚠ No OOS results to save: ${configsToTest.length} configs tested, 0 succeeded`);
   } else {
-    console.log(`[optimizer] Saving ${oosResults.length} OOS results to database for run_id=${optimizerRunId}`);
-    console.log(`[optimizer] OOS results shape check:`, {
+    console.log(`[optimizer][db] Saving OOS results:`, {
+      run_id: optimizerRunId,
       oosResultsLength: oosResults.length,
-      firstItemHasMetrics: oosResults[0]?.metrics ? true : false,
-      firstItemHasRank: oosResults[0]?.rank !== undefined,
-      firstItemHasConfig: oosResults[0]?.config ? true : false,
-      firstItemSymbol: oosResults[0]?.symbol,
     });
     
     try {
@@ -519,13 +516,15 @@ async function runOutOfSampleTests({ symbol, trainEndTs, top10, optimizerRunId }
       if (error) {
         throw error;
       }
-      console.log(`[optimizer][db] saved OOS results: ${oosResults.length}`, {
-        returnedRows: data?.length || 0,
-        sampleRow: data?.[0] || null,
-      });
+      console.log(`[optimizer][db] ✓ Saved OOS results: run_id=${optimizerRunId}, inserted rows: ${data?.length || 0}`);
     } catch (error) {
-      console.error(`[optimizer] ✗ Failed to save OOS results:`, error);
-      throw error; // Fail fast
+      console.error(`[optimizer][db] ✗ Failed to save OOS results:`, {
+        run_id: optimizerRunId,
+        oosResultsLength: oosResults.length,
+        errorMessage: error.message,
+        errorStack: error.stack,
+      });
+      // Continue - don't crash the process
     }
   }
   
