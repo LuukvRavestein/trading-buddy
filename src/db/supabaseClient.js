@@ -1233,3 +1233,213 @@ export async function getCandlesInRange({ symbol, timeframeMin, startTs, endTs, 
   }
 }
 
+// ============================================================================
+// OPTIMIZER FUNCTIONS
+// ============================================================================
+
+/**
+ * Create optimizer run
+ * 
+ * @param {object} runData - Run data
+ * @param {string} runData.symbol
+ * @param {string} runData.train_start_ts - ISO timestamp
+ * @param {string} runData.train_end_ts - ISO timestamp
+ * @param {number} runData.dd_limit - Drawdown limit
+ * @param {number} runData.total_configs - Total configs tested
+ * @param {number} runData.valid_configs - Valid configs (within DD limit)
+ * @returns {Promise<object>} Created run with id
+ */
+export async function createOptimizerRun({ symbol, train_start_ts, train_end_ts, dd_limit, total_configs, valid_configs }) {
+  if (!isSupabaseConfigured()) {
+    console.warn('[supabase] Cannot create optimizer run: Supabase not configured');
+    return { id: null };
+  }
+
+  try {
+    const result = await supabaseRequest('POST', 'optimizer_runs', {
+      symbol,
+      train_start_ts,
+      train_end_ts,
+      dd_limit,
+      total_configs,
+      valid_configs,
+    }, {
+      select: '*',
+    });
+    return result[0] || { id: null };
+  } catch (error) {
+    console.error('[supabase] Failed to create optimizer run:', error.message);
+    // Don't throw - optimizer should continue even if DB save fails
+    return { id: null };
+  }
+}
+
+/**
+ * Save optimizer top configs (top 10)
+ * 
+ * @param {string} runId - Optimizer run ID
+ * @param {Array<object>} top10 - Array of top 10 configs with metrics
+ * @returns {Promise<void>}
+ */
+export async function saveOptimizerTopConfigs(runId, top10) {
+  if (!isSupabaseConfigured() || !runId) {
+    console.warn('[supabase] Cannot save top configs: Supabase not configured or no runId');
+    return;
+  }
+
+  if (!top10 || top10.length === 0) {
+    console.warn('[supabase] No top configs to save');
+    return;
+  }
+
+  try {
+    const rows = top10.map((item, idx) => ({
+      run_id: runId,
+      rank: idx + 1,
+      score: item.primaryScore,
+      trades: item.metrics.trades,
+      winrate: item.metrics.winrate,
+      pnl: item.metrics.total_pnl_pct,
+      dd: item.metrics.max_drawdown_pct,
+      pf: item.metrics.profit_factor,
+      config: item.config,
+    }));
+
+    // Insert in batch
+    const result = await supabaseRequest('POST', 'optimizer_run_top_configs', rows, {
+      select: '*',
+    });
+    
+    console.log(`[supabase] Saved ${rows.length} top configs for run ${runId}`);
+  } catch (error) {
+    console.error('[supabase] Failed to save optimizer top configs:', error.message);
+    // Don't throw - optimizer should continue
+  }
+}
+
+/**
+ * Save all optimizer configs (all valid configs)
+ * 
+ * @param {string} runId - Optimizer run ID
+ * @param {Array<object>} validResults - Array of all valid configs with metrics
+ * @returns {Promise<void>}
+ */
+export async function saveOptimizerAllConfigs(runId, validResults) {
+  if (!isSupabaseConfigured() || !runId) {
+    console.warn('[supabase] Cannot save all configs: Supabase not configured or no runId');
+    return;
+  }
+
+  if (!validResults || validResults.length === 0) {
+    console.warn('[supabase] No configs to save');
+    return;
+  }
+
+  try {
+    // Insert in chunks of 100 to avoid payload size limits
+    const CHUNK_SIZE = 100;
+    let inserted = 0;
+
+    for (let i = 0; i < validResults.length; i += CHUNK_SIZE) {
+      const chunk = validResults.slice(i, i + CHUNK_SIZE);
+      const rows = chunk.map(item => ({
+        run_id: runId,
+        score: item.primaryScore,
+        trades: item.metrics.trades,
+        winrate: item.metrics.winrate,
+        pnl: item.metrics.total_pnl_pct,
+        dd: item.metrics.max_drawdown_pct,
+        pf: item.metrics.profit_factor,
+        config: item.config,
+      }));
+
+      await supabaseRequest('POST', 'optimizer_run_configs', rows, {
+        select: '*',
+      });
+      
+      inserted += rows.length;
+      console.log(`[supabase] Saved config chunk: ${inserted}/${validResults.length}`);
+    }
+    
+    console.log(`[supabase] Saved ${inserted} configs for run ${runId}`);
+  } catch (error) {
+    console.error('[supabase] Failed to save optimizer all configs:', error.message);
+    // Don't throw - optimizer should continue
+  }
+}
+
+/**
+ * Save optimizer out-of-sample results
+ * 
+ * @param {string} runId - Optimizer run ID
+ * @param {Array<object>} oosResults - Array of OOS results with rank and metrics
+ * @returns {Promise<void>}
+ */
+export async function saveOptimizerOOSResults(runId, oosResults) {
+  if (!isSupabaseConfigured() || !runId) {
+    console.warn('[supabase] Cannot save OOS results: Supabase not configured or no runId');
+    return;
+  }
+
+  if (!oosResults || oosResults.length === 0) {
+    console.warn('[supabase] No OOS results to save');
+    return;
+  }
+
+  try {
+    const rows = oosResults.map(item => ({
+      run_id: runId,
+      rank: item.rank,
+      symbol: item.symbol,
+      test_start_ts: item.test_start_ts,
+      test_end_ts: item.test_end_ts,
+      score: item.metrics.expectancy_pct || item.primaryScore || 0,
+      trades: item.metrics.trades,
+      winrate: item.metrics.winrate,
+      pnl: item.metrics.total_pnl_pct,
+      dd: item.metrics.max_drawdown_pct,
+      pf: item.metrics.profit_factor,
+      config: item.config,
+    }));
+
+    // Insert in batch
+    const result = await supabaseRequest('POST', 'optimizer_oos_results', rows, {
+      select: '*',
+    });
+    
+    console.log(`[supabase] Saved ${rows.length} OOS results for run ${runId}`);
+  } catch (error) {
+    console.error('[supabase] Failed to save optimizer OOS results:', error.message);
+    // Don't throw - optimizer should continue
+  }
+}
+
+/**
+ * Update optimizer run with final counts
+ * 
+ * @param {string} runId - Optimizer run ID
+ * @param {number} totalConfigs - Total configs tested
+ * @param {number} validConfigs - Valid configs (within DD limit)
+ * @returns {Promise<void>}
+ */
+export async function updateOptimizerRun(runId, totalConfigs, validConfigs) {
+  if (!isSupabaseConfigured() || !runId) {
+    console.warn('[supabase] Cannot update optimizer run: Supabase not configured or no runId');
+    return;
+  }
+
+  try {
+    await supabaseRequest('PATCH', `optimizer_runs?id=eq.${runId}`, {
+      total_configs: totalConfigs,
+      valid_configs: validConfigs,
+    }, {
+      select: '*',
+    });
+    
+    console.log(`[supabase] Updated optimizer run ${runId}: total=${totalConfigs}, valid=${validConfigs}`);
+  } catch (error) {
+    console.error('[supabase] Failed to update optimizer run:', error.message);
+    // Don't throw - optimizer should continue
+  }
+}
+
