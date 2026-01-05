@@ -1255,24 +1255,23 @@ export async function createOptimizerRun({ symbol, train_start_ts, train_end_ts,
     return { id: null };
   }
 
+  const payload = {
+    symbol,
+    train_start_ts,
+    train_end_ts,
+    dd_limit,
+    total_configs,
+    valid_configs,
+  };
+  
+  const payloadSize = JSON.stringify(payload).length;
+  console.log(`[supabase] Creating optimizer run:`, {
+    payloadSize,
+    payload,
+  });
+
   try {
-    console.log(`[supabase] Creating optimizer run:`, {
-      symbol,
-      train_start_ts,
-      train_end_ts,
-      dd_limit,
-      total_configs,
-      valid_configs,
-    });
-    
-    const result = await supabaseRequest('POST', 'optimizer_runs', {
-      symbol,
-      train_start_ts,
-      train_end_ts,
-      dd_limit,
-      total_configs,
-      valid_configs,
-    }, {
+    const result = await supabaseRequest('POST', 'optimizer_runs', payload, {
       select: '*',
     });
     
@@ -1285,9 +1284,10 @@ export async function createOptimizerRun({ symbol, train_start_ts, train_end_ts,
     const run = result[0] || { id: null };
     
     if (run.id) {
-      console.log(`[supabase] ✓ Successfully created optimizer run: ${run.id}`);
+      console.log(`[supabase] ✓ Successfully created optimizer run: run_id=${run.id}`);
     } else {
-      console.warn(`[supabase] ⚠ Created optimizer run but id is null/undefined. Result:`, result);
+      console.error(`[supabase] ✗ Created optimizer run but id is null/undefined. Result:`, result);
+      throw new Error('createOptimizerRun returned null id');
     }
     
     return run;
@@ -1295,10 +1295,14 @@ export async function createOptimizerRun({ symbol, train_start_ts, train_end_ts,
     console.error('[supabase] ✗ Failed to create optimizer run:', error);
     console.error('[supabase] Error details:', {
       errorMessage: error.message,
+      errorDetails: error.details,
+      errorHint: error.hint,
+      errorCode: error.code,
       errorStack: error.stack,
+      payloadSize,
+      payload,
     });
-    // Don't throw - optimizer should continue even if DB save fails
-    return { id: null };
+    throw error; // Throw instead of swallowing
   }
 }
 
@@ -1311,60 +1315,71 @@ export async function createOptimizerRun({ symbol, train_start_ts, train_end_ts,
  */
 export async function saveOptimizerTopConfigs(runId, top10) {
   if (!isSupabaseConfigured()) {
-    console.warn('[supabase] Cannot save top configs: Supabase not configured');
-    return;
+    throw new Error('Cannot save top configs: Supabase not configured');
   }
 
   if (!runId) {
-    console.warn('[supabase] Cannot save top configs: runId is null or undefined');
-    return;
+    throw new Error('Cannot save top configs: runId is null or undefined');
   }
 
   if (!top10 || top10.length === 0) {
-    console.warn('[supabase] Cannot save top configs: top10 array is empty or null');
-    return;
+    throw new Error('Cannot save top configs: top10 array is empty or null');
   }
 
-  try {
-    console.log(`[supabase] Preparing to save ${top10.length} top configs for run ${runId}`);
-    
-    const rows = top10.map((item, idx) => {
-      if (!item.metrics) {
-        throw new Error(`Top config at index ${idx} has no metrics`);
-      }
-      return {
-        run_id: runId,
-        rank: idx + 1,
-        score: item.primaryScore,
-        trades: item.metrics.trades,
-        winrate: item.metrics.winrate,
-        pnl: item.metrics.total_pnl_pct,
-        dd: item.metrics.max_drawdown_pct,
-        pf: item.metrics.profit_factor,
-        config: item.config,
-      };
-    });
+  console.log(`[supabase] Preparing to save ${top10.length} top configs for run_id=${runId}`);
+  
+  const rows = top10.map((item, idx) => {
+    if (!item.metrics) {
+      throw new Error(`Top config at index ${idx} has no metrics`);
+    }
+    return {
+      run_id: runId,
+      rank: idx + 1,
+      score: item.primaryScore,
+      trades: item.metrics.trades,
+      winrate: item.metrics.winrate,
+      pnl: item.metrics.total_pnl_pct,
+      dd: item.metrics.max_drawdown_pct,
+      pf: item.metrics.profit_factor,
+      config: item.config,
+    };
+  });
 
-    console.log(`[supabase] Inserting ${rows.length} rows into optimizer_run_top_configs`);
-    
+  const payloadSize = JSON.stringify(rows).length;
+  console.log(`[supabase] Inserting ${rows.length} rows into optimizer_run_top_configs:`, {
+    run_id: runId,
+    payloadSize,
+    sampleRow: rows[0] || null,
+  });
+
+  try {
     // Insert in batch
     const result = await supabaseRequest('POST', 'optimizer_run_top_configs', rows, {
       select: '*',
     });
     
-    console.log(`[supabase] ✓ Successfully saved ${rows.length} top configs for run ${runId}`);
+    console.log(`[supabase] ✓ Successfully saved ${rows.length} top configs for run_id=${runId}`);
     if (result && result.length > 0) {
       console.log(`[supabase] Database returned ${result.length} rows (expected ${rows.length})`);
+      console.log(`[supabase] Sample returned row:`, result[0]);
+    } else {
+      console.warn(`[supabase] ⚠ Database returned no rows (expected ${rows.length})`);
     }
   } catch (error) {
     console.error('[supabase] ✗ Failed to save optimizer top configs:', error);
     console.error('[supabase] Error details:', {
-      runId,
-      top10Length: top10?.length,
+      run_id: runId,
+      top10Length: top10.length,
+      rowsLength: rows.length,
+      payloadSize,
       errorMessage: error.message,
+      errorDetails: error.details,
+      errorHint: error.hint,
+      errorCode: error.code,
       errorStack: error.stack,
+      sampleRow: rows[0] || null,
     });
-    // Don't throw - optimizer should continue
+    throw error; // Throw instead of swallowing
   }
 }
 
@@ -1428,63 +1443,74 @@ export async function saveOptimizerAllConfigs(runId, validResults) {
  */
 export async function saveOptimizerOOSResults(runId, oosResults) {
   if (!isSupabaseConfigured()) {
-    console.warn('[supabase] Cannot save OOS results: Supabase not configured');
-    return;
+    throw new Error('Cannot save OOS results: Supabase not configured');
   }
 
   if (!runId) {
-    console.warn('[supabase] Cannot save OOS results: runId is null or undefined');
-    return;
+    throw new Error('Cannot save OOS results: runId is null or undefined');
   }
 
   if (!oosResults || oosResults.length === 0) {
-    console.warn('[supabase] Cannot save OOS results: oosResults array is empty or null');
-    return;
+    throw new Error('Cannot save OOS results: oosResults array is empty or null');
   }
 
-  try {
-    console.log(`[supabase] Preparing to save ${oosResults.length} OOS results for run ${runId}`);
-    
-    const rows = oosResults.map((item, idx) => {
-      if (!item.metrics) {
-        throw new Error(`OOS result at index ${idx} (rank ${item.rank}) has no metrics`);
-      }
-      return {
-        run_id: runId,
-        rank: item.rank,
-        symbol: item.symbol,
-        test_start_ts: item.test_start_ts,
-        test_end_ts: item.test_end_ts,
-        score: item.metrics.expectancy_pct || item.primaryScore || 0,
-        trades: item.metrics.trades,
-        winrate: item.metrics.winrate,
-        pnl: item.metrics.total_pnl_pct,
-        dd: item.metrics.max_drawdown_pct,
-        pf: item.metrics.profit_factor,
-        config: item.config,
-      };
-    });
+  console.log(`[supabase] Preparing to save ${oosResults.length} OOS results for run_id=${runId}`);
+  
+  const rows = oosResults.map((item, idx) => {
+    if (!item.metrics) {
+      throw new Error(`OOS result at index ${idx} (rank ${item.rank}) has no metrics`);
+    }
+    return {
+      run_id: runId,
+      rank: item.rank,
+      symbol: item.symbol,
+      test_start_ts: item.test_start_ts,
+      test_end_ts: item.test_end_ts,
+      score: item.metrics.expectancy_pct || item.primaryScore || 0,
+      trades: item.metrics.trades,
+      winrate: item.metrics.winrate,
+      pnl: item.metrics.total_pnl_pct,
+      dd: item.metrics.max_drawdown_pct,
+      pf: item.metrics.profit_factor,
+      config: item.config,
+    };
+  });
 
-    console.log(`[supabase] Inserting ${rows.length} rows into optimizer_oos_results`);
-    
+  const payloadSize = JSON.stringify(rows).length;
+  console.log(`[supabase] Inserting ${rows.length} rows into optimizer_oos_results:`, {
+    run_id: runId,
+    payloadSize,
+    sampleRow: rows[0] || null,
+  });
+
+  try {
     // Insert in batch
     const result = await supabaseRequest('POST', 'optimizer_oos_results', rows, {
       select: '*',
     });
     
-    console.log(`[supabase] ✓ Successfully saved ${rows.length} OOS results for run ${runId}`);
+    console.log(`[supabase] ✓ Successfully saved ${rows.length} OOS results for run_id=${runId}`);
     if (result && result.length > 0) {
       console.log(`[supabase] Database returned ${result.length} rows (expected ${rows.length})`);
+      console.log(`[supabase] Sample returned row:`, result[0]);
+    } else {
+      console.warn(`[supabase] ⚠ Database returned no rows (expected ${rows.length})`);
     }
   } catch (error) {
     console.error('[supabase] ✗ Failed to save optimizer OOS results:', error);
     console.error('[supabase] Error details:', {
-      runId,
-      oosResultsLength: oosResults?.length,
+      run_id: runId,
+      oosResultsLength: oosResults.length,
+      rowsLength: rows.length,
+      payloadSize,
       errorMessage: error.message,
+      errorDetails: error.details,
+      errorHint: error.hint,
+      errorCode: error.code,
       errorStack: error.stack,
+      sampleRow: rows[0] || null,
     });
-    // Don't throw - optimizer should continue
+    throw error; // Throw instead of swallowing
   }
 }
 
@@ -1498,39 +1524,49 @@ export async function saveOptimizerOOSResults(runId, oosResults) {
  */
 export async function updateOptimizerRun(runId, totalConfigs, validConfigs) {
   if (!isSupabaseConfigured()) {
-    console.warn('[supabase] Cannot update optimizer run: Supabase not configured');
-    return;
+    throw new Error('Cannot update optimizer run: Supabase not configured');
   }
 
   if (!runId) {
-    console.warn('[supabase] Cannot update optimizer run: runId is null or undefined');
-    return;
+    throw new Error('Cannot update optimizer run: runId is null or undefined');
   }
 
+  const payload = {
+    total_configs: totalConfigs,
+    valid_configs: validConfigs,
+  };
+  
+  const payloadSize = JSON.stringify(payload).length;
+  console.log(`[supabase] Updating optimizer run run_id=${runId}:`, {
+    payloadSize,
+    payload,
+  });
+
   try {
-    console.log(`[supabase] Updating optimizer run ${runId} with total_configs=${totalConfigs}, valid_configs=${validConfigs}`);
-    
-    const result = await supabaseRequest('PATCH', `optimizer_runs?id=eq.${runId}`, {
-      total_configs: totalConfigs,
-      valid_configs: validConfigs,
-    }, {
+    const result = await supabaseRequest('PATCH', `optimizer_runs?id=eq.${runId}`, payload, {
       select: '*',
     });
     
-    console.log(`[supabase] ✓ Successfully updated optimizer run ${runId}: total=${totalConfigs}, valid=${validConfigs}`);
+    console.log(`[supabase] ✓ Successfully updated optimizer run run_id=${runId}: total=${totalConfigs}, valid=${validConfigs}`);
     if (result && result.length > 0) {
       console.log(`[supabase] Updated row:`, result[0]);
+    } else {
+      console.warn(`[supabase] ⚠ Update returned no rows (run_id=${runId} may not exist)`);
     }
   } catch (error) {
     console.error('[supabase] ✗ Failed to update optimizer run:', error);
     console.error('[supabase] Error details:', {
-      runId,
+      run_id: runId,
       totalConfigs,
       validConfigs,
+      payloadSize,
       errorMessage: error.message,
+      errorDetails: error.details,
+      errorHint: error.hint,
+      errorCode: error.code,
       errorStack: error.stack,
     });
-    // Don't throw - optimizer should continue
+    throw error; // Throw instead of swallowing
   }
 }
 

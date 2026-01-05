@@ -105,11 +105,13 @@ export async function runOptimizer({ symbol, startTs, endTs }) {
       valid_configs: 0, // Will update after filtering
     });
     optimizerRunId = run.id;
-    if (optimizerRunId) {
-      console.log(`[optimizer] Created optimizer run: ${optimizerRunId}`);
+    if (!optimizerRunId) {
+      throw new Error('createOptimizerRun returned null run_id');
     }
+    console.log(`[optimizer] ✓ Created optimizer run: run_id=${optimizerRunId}`);
   } catch (error) {
-    console.warn(`[optimizer] Failed to create optimizer run (continuing):`, error.message);
+    console.error(`[optimizer] ✗ Failed to create optimizer run:`, error);
+    throw error; // Fail fast if we can't create the run
   }
   
   const configs = generateConfigGrid();
@@ -156,43 +158,66 @@ export async function runOptimizer({ symbol, startTs, endTs }) {
   // Get top 10
   const top10 = validResults.slice(0, 10);
   
-  console.log(`[optimizer] Optimization complete: ${validResults.length} valid configs (${results.length - validResults.length} exceeded DD limit)`);
-  console.log(`[optimizer] Top 10 configs:`);
+  console.log(`[optimizer] Optimization complete:`, {
+    totalConfigs: results.length,
+    validConfigs: validResults.length,
+    exceededDDLimit: results.length - validResults.length,
+    top10Length: top10.length,
+    run_id: optimizerRunId,
+  });
   
+  // Log why top10 might be empty
+  if (top10.length === 0) {
+    console.warn(`[optimizer] ⚠ top10 is empty:`, {
+      validResultsLength: validResults.length,
+      resultsLength: results.length,
+      ddLimit: DD_LIMIT,
+      reason: validResults.length === 0 
+        ? 'No configs passed DD_LIMIT filter' 
+        : 'Unknown (should not happen)',
+    });
+  }
+  
+  console.log(`[optimizer] Top 10 configs:`);
   top10.forEach((result, idx) => {
     const m = result.metrics;
     console.log(`[optimizer] ${idx + 1}. Score: ${result.primaryScore.toFixed(2)} | Trades: ${m.trades} | Winrate: ${(m.winrate * 100).toFixed(1)}% | PnL: ${m.total_pnl_pct.toFixed(2)}% | DD: ${m.max_drawdown_pct.toFixed(2)}% | PF: ${m.profit_factor.toFixed(2)}`);
     console.log(`[optimizer]    Config: ${JSON.stringify(result.config)}`);
   });
   
+  // Assert optimizerRunId is not null
+  if (!optimizerRunId) {
+    throw new Error('optimizerRunId is null - cannot proceed with DB writes');
+  }
+  console.log(`[optimizer] Using run_id=${optimizerRunId} for all DB operations`);
+  
   // Update optimizer run with final counts
-  if (optimizerRunId) {
-    console.log(`[optimizer] Updating optimizer run ${optimizerRunId} with counts: total=${results.length}, valid=${validResults.length}`);
-    try {
-      await updateOptimizerRun(optimizerRunId, results.length, validResults.length);
-      console.log(`[optimizer] ✓ Successfully updated optimizer run ${optimizerRunId}`);
-    } catch (error) {
-      console.error(`[optimizer] ✗ Failed to update optimizer run counts:`, error);
-    }
-  } else {
-    console.warn(`[optimizer] Cannot update optimizer run: optimizerRunId is null`);
+  console.log(`[optimizer] Updating optimizer run run_id=${optimizerRunId} with counts: total=${results.length}, valid=${validResults.length}`);
+  try {
+    await updateOptimizerRun(optimizerRunId, results.length, validResults.length);
+    console.log(`[optimizer] ✓ Successfully updated optimizer run run_id=${optimizerRunId}`);
+  } catch (error) {
+    console.error(`[optimizer] ✗ Failed to update optimizer run counts:`, error);
+    throw error; // Fail fast
   }
   
   // Save top 10 configs to database
-  if (optimizerRunId && top10.length > 0) {
-    console.log(`[optimizer] Saving ${top10.length} top configs to database for run ${optimizerRunId}`);
+  if (top10.length === 0) {
+    console.warn(`[optimizer] ⚠ Skipping saveOptimizerTopConfigs: top10 array is empty`);
+  } else {
+    console.log(`[optimizer] Saving ${top10.length} top configs to database for run_id=${optimizerRunId}`);
+    console.log(`[optimizer] Top configs shape check:`, {
+      top10Length: top10.length,
+      firstItemHasMetrics: top10[0]?.metrics ? true : false,
+      firstItemHasPrimaryScore: top10[0]?.primaryScore !== undefined,
+      firstItemHasConfig: top10[0]?.config ? true : false,
+    });
     try {
       await saveOptimizerTopConfigs(optimizerRunId, top10);
-      console.log(`[optimizer] ✓ Successfully saved ${top10.length} top configs for run ${optimizerRunId}`);
+      console.log(`[optimizer] ✓ Successfully saved ${top10.length} top configs for run_id=${optimizerRunId}`);
     } catch (error) {
       console.error(`[optimizer] ✗ Failed to save top configs:`, error);
-    }
-  } else {
-    if (!optimizerRunId) {
-      console.warn(`[optimizer] Cannot save top configs: optimizerRunId is null`);
-    }
-    if (top10.length === 0) {
-      console.warn(`[optimizer] Cannot save top configs: top10 array is empty`);
+      throw error; // Fail fast
     }
   }
   
