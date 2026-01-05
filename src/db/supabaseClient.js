@@ -1256,6 +1256,15 @@ export async function createOptimizerRun({ symbol, train_start_ts, train_end_ts,
   }
 
   try {
+    console.log(`[supabase] Creating optimizer run:`, {
+      symbol,
+      train_start_ts,
+      train_end_ts,
+      dd_limit,
+      total_configs,
+      valid_configs,
+    });
+    
     const result = await supabaseRequest('POST', 'optimizer_runs', {
       symbol,
       train_start_ts,
@@ -1266,9 +1275,28 @@ export async function createOptimizerRun({ symbol, train_start_ts, train_end_ts,
     }, {
       select: '*',
     });
-    return result[0] || { id: null };
+    
+    console.log(`[supabase] createOptimizerRun response:`, {
+      resultType: Array.isArray(result) ? 'array' : typeof result,
+      resultLength: Array.isArray(result) ? result.length : 'N/A',
+      firstItem: result && result[0] ? result[0] : null,
+    });
+    
+    const run = result[0] || { id: null };
+    
+    if (run.id) {
+      console.log(`[supabase] ✓ Successfully created optimizer run: ${run.id}`);
+    } else {
+      console.warn(`[supabase] ⚠ Created optimizer run but id is null/undefined. Result:`, result);
+    }
+    
+    return run;
   } catch (error) {
-    console.error('[supabase] Failed to create optimizer run:', error.message);
+    console.error('[supabase] ✗ Failed to create optimizer run:', error);
+    console.error('[supabase] Error details:', {
+      errorMessage: error.message,
+      errorStack: error.stack,
+    });
     // Don't throw - optimizer should continue even if DB save fails
     return { id: null };
   }
