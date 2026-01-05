@@ -1378,16 +1378,23 @@ export async function saveOptimizerTopConfigs(runId, top10) {
 
     if (!response.ok) {
       const errorText = await response.text();
-      const error = new Error(`Supabase API error: ${response.status} ${errorText.substring(0, 200)}`);
+      const errorMsg = `Supabase API error: ${response.status} ${errorText.substring(0, 200)}`;
+      const error = new Error(errorMsg);
       error.code = response.status;
       error.details = errorText;
+      error.hint = errorText.includes('hint') ? errorText : null;
+      console.error('[supabase] ✗ Supabase error response:', {
+        status: response.status,
+        statusText: response.statusText,
+        errorText: errorText.substring(0, 500),
+      });
       throw error;
     }
 
     const result = await response.json();
     const data = Array.isArray(result) ? result : [result];
     
-    console.log(`[supabase] ✓ Successfully saved ${rows.length} top configs for run_id=${runId}`);
+    console.log(`[supabase] ✓ Successfully saved ${rows.length} top configs for run_id=${runId}, inserted count: ${data.length}`);
     if (data && data.length > 0) {
       console.log(`[supabase] Database returned ${data.length} rows (expected ${rows.length})`);
       console.log(`[supabase] Sample returned row:`, data[0]);
@@ -1410,7 +1417,13 @@ export async function saveOptimizerTopConfigs(runId, top10) {
       errorStack: error.stack,
       sampleRow: rows[0] || null,
     });
-    return { data: null, error };
+    // Don't swallow - throw the error so caller can handle it
+    const enhancedError = new Error(`saveOptimizerTopConfigs failed: ${error.message}`);
+    enhancedError.code = error.code;
+    enhancedError.details = error.details;
+    enhancedError.hint = error.hint;
+    enhancedError.originalError = error;
+    throw enhancedError;
   }
 }
 
