@@ -319,12 +319,38 @@ async function runBacktestMode() {
     endTs: BACKTEST_END_TS,
   });
   
+  // Initialize status
+  lastRunStatus = {
+    mode: 'backtest',
+    status: 'running',
+    completedAt: null,
+    results: null,
+    error: null,
+    optimizerRunId: null,
+    currentConfigIndex: null,
+    totalConfigs: null,
+  };
+  
   try {
     const top10 = await runOptimizer({
       symbol: SYMBOL,
       startTs: BACKTEST_START_TS,
       endTs: BACKTEST_END_TS,
     });
+    
+    // Update status on success
+    lastRunStatus.status = 'finished';
+    lastRunStatus.completedAt = new Date().toISOString();
+    lastRunStatus.results = {
+      topConfigs: top10.length,
+      top10: top10.map((config, idx) => ({
+        rank: idx + 1,
+        score: config.primaryScore,
+        trades: config.metrics?.trades,
+        pnl: config.metrics?.total_pnl_pct,
+        dd: config.metrics?.max_drawdown_pct,
+      })),
+    };
     
     log('info', 'Backtest optimizer complete', {
       topConfigs: top10.length,
@@ -336,7 +362,24 @@ async function runBacktestMode() {
       error: error.message,
       stack: error.stack,
     });
-    throw error;
+    
+    // Update status on error
+    lastRunStatus.status = 'failed';
+    lastRunStatus.completedAt = new Date().toISOString();
+    lastRunStatus.error = error.message;
+    
+    // Don't throw - we'll start the server in finally
+    return true;
+  } finally {
+    // Always start HTTP server to keep process alive (success or failure)
+    startBackfillServer();
+    
+    const PORT = parseInt(process.env.PORT || '10000', 10);
+    log('info', 'Backtest mode complete, HTTP server running to keep process alive', {
+      port: PORT,
+      endpoints: ['/health', '/status'],
+      status: lastRunStatus.status,
+    });
   }
 }
 
@@ -345,10 +388,16 @@ let lastRunStatus = {
   mode: null,
   completedAt: null,
   results: null,
+  error: null,
+  // For backtest mode
+  optimizerRunId: null,
+  currentConfigIndex: null,
+  totalConfigs: null,
+  status: null, // 'running' | 'finished' | 'failed'
 };
 
 /**
- * Start HTTP server for backfill mode
+ * Start HTTP server for backfill/backtest mode
  */
 function startBackfillServer() {
   const PORT = parseInt(process.env.PORT || '10000', 10);
@@ -369,15 +418,37 @@ function startBackfillServer() {
     res.setHeader('Access-Control-Allow-Origin', '*');
     
     if (path === '/health') {
-      res.writeHead(200, { 'Content-Type': 'text/plain' });
-      res.end('ok');
+      const mode = lastRunStatus.mode === 'backtest' ? 'BACKTEST_MODE' : 'BACKFILL_MODE';
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, mode }));
     } else if (path === '/status') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
+      
+      // Build status response based on mode
+      const statusResponse = {
         mode: lastRunStatus.mode,
         completedAt: lastRunStatus.completedAt,
-        results: lastRunStatus.results,
-      }, null, 2));
+        status: lastRunStatus.status || (lastRunStatus.completedAt ? 'finished' : 'running'),
+      };
+      
+      if (lastRunStatus.mode === 'backtest') {
+        statusResponse.optimizerRunId = lastRunStatus.optimizerRunId;
+        statusResponse.currentConfigIndex = lastRunStatus.currentConfigIndex;
+        statusResponse.totalConfigs = lastRunStatus.totalConfigs;
+        if (lastRunStatus.error) {
+          statusResponse.error = lastRunStatus.error;
+        }
+        if (lastRunStatus.results) {
+          statusResponse.results = lastRunStatus.results;
+        }
+      } else if (lastRunStatus.mode === 'backfill') {
+        statusResponse.results = lastRunStatus.results;
+        if (lastRunStatus.error) {
+          statusResponse.error = lastRunStatus.error;
+        }
+      }
+      
+      res.end(JSON.stringify(statusResponse, null, 2));
     } else {
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Not found' }));
@@ -385,14 +456,15 @@ function startBackfillServer() {
   });
   
   server.listen(PORT, () => {
-    log('info', 'Backfill HTTP server started', {
+    const mode = lastRunStatus.mode === 'backtest' ? 'Backtest' : 'Backfill';
+    log('info', `${mode} HTTP server started`, {
       port: PORT,
       endpoints: ['/health', '/status'],
     });
   });
   
   server.on('error', (error) => {
-    log('error', 'Backfill HTTP server error', {
+    log('error', 'HTTP server error', {
       error: error.message,
     });
   });
@@ -505,14 +577,15 @@ async function runBackfillMode() {
   const isBacktestMode = await runBacktestMode();
   
   if (isBacktestMode) {
-    log('info', 'Backtest mode complete, exiting');
-    process.exit(0);
+    // HTTP server already started in runBacktestMode finally block
+    // Don't exit - HTTP server keeps process alive
+    return;
   }
   
   const isBackfillMode = await runBackfillMode();
   
   if (isBackfillMode) {
-    log('info', 'Backfill mode complete, HTTP server running to keep process alive');
+    // HTTP server already started in runBackfillMode
     // Don't exit - HTTP server keeps process alive
     return;
   }
