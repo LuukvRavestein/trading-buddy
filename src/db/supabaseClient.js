@@ -485,38 +485,41 @@ export async function getMaxCandleTs({ symbol, timeframeMin = 1 }) {
 
   const client = getSupabaseClient();
 
-  async function fetchMaxTs(urlDescription, url) {
+  // Helper to fetch max ts using service_role client via REST (bypasses RLS)
+  async function fetchMaxTs(description, path) {
+    const fullPath = path; // Path may already include query string
+    console.log('[supabase] getMaxCandleTs: querying candles with', { description, path: fullPath });
+
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'apikey': client.key,
-          'Authorization': `Bearer ${client.key}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`[supabase] getMaxCandleTs: Failed to get max ts (${urlDescription}): ${response.status} ${errorText}`);
-        return null;
+      // Use supabaseRequest with service_role key to ensure RLS is bypassed
+      const rows = await supabaseRequest('GET', fullPath);
+      const row = rows && rows.length > 0 ? rows[0] : null;
+      if (row && row.ts) {
+        console.log('[supabase] getMaxCandleTs: query result', {
+          description,
+          ts: row.ts,
+          timeframe_min: row.timeframe_min,
+        });
+        return row.ts;
       }
-
-      const data = await response.json();
-      const row = data && data.length > 0 ? data[0] : null;
-      return row ? row.ts : null;
+      console.warn('[supabase] getMaxCandleTs: no rows returned', { description });
+      return null;
     } catch (error) {
-      console.error(`[supabase] getMaxCandleTs: Error fetching max ts (${urlDescription}):`, error);
+      console.error('[supabase] getMaxCandleTs: error during query', {
+        description,
+        errorMessage: error.message,
+        errorStack: error.stack,
+      });
       return null;
     }
   }
 
   // First try specific timeframe (e.g., 1m)
-  const urlWithTf = `${client.url}/rest/v1/candles?symbol=eq.${symbol}&timeframe_min=eq.${timeframeMin}&order=ts.desc&limit=1&select=ts`;
-  let maxTs = await fetchMaxTs(`symbol=${symbol}, timeframe_min=${timeframeMin}`, urlWithTf);
+  const pathWithTf = `candles?symbol=eq.${symbol}&timeframe_min=eq.${timeframeMin}&order=ts.desc&limit=1&select=ts,timeframe_min`;
+  let maxTs = await fetchMaxTs(`symbol=${symbol}, timeframe_min=${timeframeMin}`, pathWithTf);
 
   if (maxTs) {
-    console.log('[supabase] getMaxCandleTs: Found max ts for symbol/timeframe:', {
+    console.log('[supabase] getMaxCandleTs: found max ts for symbol/timeframe', {
       symbol,
       timeframeMin,
       maxTs,
@@ -525,11 +528,11 @@ export async function getMaxCandleTs({ symbol, timeframeMin = 1 }) {
   }
 
   // Fallback: max ts for symbol across all timeframes
-  const urlSymbolOnly = `${client.url}/rest/v1/candles?symbol=eq.${symbol}&order=ts.desc&limit=1&select=ts,timeframe_min`;
-  maxTs = await fetchMaxTs(`symbol=${symbol} (any timeframe)`, urlSymbolOnly);
+  const pathSymbolOnly = `candles?symbol=eq.${symbol}&order=ts.desc&limit=1&select=ts,timeframe_min`;
+  maxTs = await fetchMaxTs(`symbol=${symbol} (any timeframe)`, pathSymbolOnly);
 
   if (maxTs) {
-    console.log('[supabase] getMaxCandleTs: Fallback max ts for symbol across all timeframes:', {
+    console.log('[supabase] getMaxCandleTs: fallback max ts for symbol across all timeframes', {
       symbol,
       maxTs,
     });

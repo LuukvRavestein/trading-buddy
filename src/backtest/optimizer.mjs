@@ -429,6 +429,7 @@ async function runOutOfSampleTests({ symbol, trainEndTs, top10, optimizerRunId }
     // Use explicit OOS range
     oosStartTs = normalizeISO(process.env.OOS_START_TS);
     oosEndTs = normalizeISO(process.env.OOS_END_TS);
+    desiredOosEndTs = oosEndTs;
     console.log(`[optimizer] Using explicit OOS range: ${oosStartTs} to ${oosEndTs}`);
   } else {
     // Calculate OOS range: start 1 minute after trainEndTs, end after OOS_DAYS days
@@ -465,7 +466,7 @@ async function runOutOfSampleTests({ symbol, trainEndTs, top10, optimizerRunId }
       symbol,
       trainEndTs,
       oosStartTs,
-      desiredOosEndTs: desiredOosEndTs || oosEndTs,
+      desiredOosEndTs,
       maxDataTs,
     });
     return;
@@ -473,19 +474,22 @@ async function runOutOfSampleTests({ symbol, trainEndTs, top10, optimizerRunId }
 
   // Cap end at maxDataTs (rounded to end-of-day) if needed
   const maxDataEndOfDay = setEndOfDayISO(normalizeISO(maxDataTs));
-  const cappedOosEndTs = new Date(maxDataEndOfDay).getTime() < new Date(oosEndTs).getTime()
+  const finalOosEndTs = new Date(maxDataEndOfDay).getTime() < new Date(oosEndTs).getTime()
     ? maxDataEndOfDay
     : oosEndTs;
-  oosEndTs = cappedOosEndTs;
+  oosEndTs = finalOosEndTs;
 
   console.log('[optimizer][oos] Final OOS range after data cap:', {
     symbol,
     trainEndTs,
     oosStartTs,
-    desiredOosEndTs: desiredOosEndTs || oosEndTs,
+    desiredOosEndTs,
     maxDataTs,
-    cappedOosEndTs,
+    maxDataEndOfDay,
+    finalOosEndTs,
   });
+
+  console.log(`[optimizer][oos] Using OOS range: ${oosStartTs} -> ${oosEndTs} (desired ${desiredOosEndTs}, maxData ${maxDataTs})`);
   
   const topN = parseInt(process.env.OOS_TOP_N || '3', 10);
   const configsToTest = top10.slice(0, Math.min(topN, top10.length));
