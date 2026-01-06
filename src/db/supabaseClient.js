@@ -467,6 +467,80 @@ export async function getLatestCandles({ symbol, timeframeMin, limit = 500 }) {
 }
 
 /**
+ * Get max candle ts for a symbol (optionally for a specific timeframe)
+ * 
+ * Tries to get max ts for (symbol, timeframe_min). If no rows are found for that
+ * timeframe, falls back to the max ts for the symbol across all timeframes.
+ * 
+ * @param {object} options
+ * @param {string} options.symbol
+ * @param {number} [options.timeframeMin] - Preferred timeframe (e.g., 1 for 1m)
+ * @returns {Promise<string|null>} Max ts as ISO string or null if no data
+ */
+export async function getMaxCandleTs({ symbol, timeframeMin = 1 }) {
+  if (!isSupabaseConfigured()) {
+    console.warn('[supabase] getMaxCandleTs: Supabase not configured');
+    return null;
+  }
+
+  const client = getSupabaseClient();
+
+  async function fetchMaxTs(urlDescription, url) {
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'apikey': client.key,
+          'Authorization': `Bearer ${client.key}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[supabase] getMaxCandleTs: Failed to get max ts (${urlDescription}): ${response.status} ${errorText}`);
+        return null;
+      }
+
+      const data = await response.json();
+      const row = data && data.length > 0 ? data[0] : null;
+      return row ? row.ts : null;
+    } catch (error) {
+      console.error(`[supabase] getMaxCandleTs: Error fetching max ts (${urlDescription}):`, error);
+      return null;
+    }
+  }
+
+  // First try specific timeframe (e.g., 1m)
+  const urlWithTf = `${client.url}/rest/v1/candles?symbol=eq.${symbol}&timeframe_min=eq.${timeframeMin}&order=ts.desc&limit=1&select=ts`;
+  let maxTs = await fetchMaxTs(`symbol=${symbol}, timeframe_min=${timeframeMin}`, urlWithTf);
+
+  if (maxTs) {
+    console.log('[supabase] getMaxCandleTs: Found max ts for symbol/timeframe:', {
+      symbol,
+      timeframeMin,
+      maxTs,
+    });
+    return maxTs;
+  }
+
+  // Fallback: max ts for symbol across all timeframes
+  const urlSymbolOnly = `${client.url}/rest/v1/candles?symbol=eq.${symbol}&order=ts.desc&limit=1&select=ts,timeframe_min`;
+  maxTs = await fetchMaxTs(`symbol=${symbol} (any timeframe)`, urlSymbolOnly);
+
+  if (maxTs) {
+    console.log('[supabase] getMaxCandleTs: Fallback max ts for symbol across all timeframes:', {
+      symbol,
+      maxTs,
+    });
+    return maxTs;
+  }
+
+  console.warn('[supabase] getMaxCandleTs: No candles found for symbol', { symbol, timeframeMin });
+  return null;
+}
+
+/**
  * Get latest single candle for a symbol and timeframe
  * 
  * @param {object} options

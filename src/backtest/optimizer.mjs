@@ -5,7 +5,7 @@
  */
 
 import { runBacktest } from './backtestEngine.mjs';
-import { createOptimizerRun, updateOptimizerRun, saveOptimizerTopConfigs, saveOptimizerAllConfigs, saveOptimizerOOSResults } from '../db/supabaseClient.js';
+import { createOptimizerRun, updateOptimizerRun, saveOptimizerTopConfigs, saveOptimizerAllConfigs, saveOptimizerOOSResults, getMaxCandleTs } from '../db/supabaseClient.js';
 import { addMinutesISO, addDaysISO, setEndOfDayISO, normalizeISO } from '../utils/time.mjs';
 
 // BUILD_FINGERPRINT: Version with DB saving enabled
@@ -423,6 +423,7 @@ async function runOutOfSampleTests({ symbol, trainEndTs, top10, optimizerRunId }
   
   // Determine OOS range
   let oosStartTs, oosEndTs;
+  let desiredOosEndTs;
   
   if (process.env.OOS_START_TS && process.env.OOS_END_TS) {
     // Use explicit OOS range
@@ -434,9 +435,57 @@ async function runOutOfSampleTests({ symbol, trainEndTs, top10, optimizerRunId }
     const oosDays = parseInt(process.env.OOS_DAYS || '7', 10);
     oosStartTs = addMinutesISO(normalizeISO(trainEndTs), 1);
     const oosEndDate = addDaysISO(oosStartTs, oosDays);
-    oosEndTs = setEndOfDayISO(oosEndDate);
-    console.log(`[optimizer] Calculated OOS range: ${oosStartTs} to ${oosEndTs} (${oosDays} days after training)`);
+    desiredOosEndTs = setEndOfDayISO(oosEndDate);
+    oosEndTs = desiredOosEndTs;
+    console.log(`[optimizer] Calculated desired OOS range: ${oosStartTs} to ${desiredOosEndTs} (${oosDays} days after training)`);
   }
+
+  // Cap OOS end to available candle data
+  let maxDataTs = null;
+  try {
+    maxDataTs = await getMaxCandleTs({ symbol, timeframeMin: 1 });
+  } catch (error) {
+    console.error('[optimizer][oos] Failed to fetch max candle ts for symbol:', {
+      symbol,
+      errorMessage: error.message,
+      errorStack: error.stack,
+    });
+  }
+
+  if (!maxDataTs) {
+    console.warn('[optimizer][oos] No candle data available for symbol, skipping OOS tests entirely:', { symbol });
+    return;
+  }
+
+  const maxDataDate = new Date(maxDataTs);
+  const oosStartDate = new Date(oosStartTs);
+
+  if (maxDataDate.getTime() < oosStartDate.getTime()) {
+    console.warn('[optimizer][oos] No OOS data available: maxDataTs is before oosStartTs. Skipping OOS tests.', {
+      symbol,
+      trainEndTs,
+      oosStartTs,
+      desiredOosEndTs: desiredOosEndTs || oosEndTs,
+      maxDataTs,
+    });
+    return;
+  }
+
+  // Cap end at maxDataTs (rounded to end-of-day) if needed
+  const maxDataEndOfDay = setEndOfDayISO(normalizeISO(maxDataTs));
+  const cappedOosEndTs = new Date(maxDataEndOfDay).getTime() < new Date(oosEndTs).getTime()
+    ? maxDataEndOfDay
+    : oosEndTs;
+  oosEndTs = cappedOosEndTs;
+
+  console.log('[optimizer][oos] Final OOS range after data cap:', {
+    symbol,
+    trainEndTs,
+    oosStartTs,
+    desiredOosEndTs: desiredOosEndTs || oosEndTs,
+    maxDataTs,
+    cappedOosEndTs,
+  });
   
   const topN = parseInt(process.env.OOS_TOP_N || '3', 10);
   const configsToTest = top10.slice(0, Math.min(topN, top10.length));
