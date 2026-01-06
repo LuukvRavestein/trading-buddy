@@ -412,6 +412,118 @@ Om terug te gaan naar normale live/paper trading mode:
 - Verwijder `BACKTEST_MODE` environment variable of zet `BACKTEST_MODE=0`
 - De worker zal dan normaal draaien
 
+## 📥 Candle Ingest
+
+De bot heeft een robuuste candle ingest oplossing om historische candles van Deribit naar Supabase te halen. Dit is handig voor:
+- **One-time backfill**: Vul historische data aan (bijv. na een periode zonder data)
+- **Continuous ingest**: Houd candles up-to-date door automatisch nieuwe data te fetchen
+
+### Candle Ingest Job
+
+De `src/jobs/candleIngest.mjs` module biedt een standalone script om candles te fetchen en op te slaan.
+
+#### 1. One-Time Backfill
+
+Voor eenmalige backfill van historische data:
+
+```bash
+# Set environment variables
+export SYMBOL=BTC-PERPETUAL
+export BACKFILL=true
+export BACKFILL_START_TS=2026-01-02T00:00:00Z
+export BACKFILL_END_TS=2026-01-14T23:59:00Z
+
+# Run ingest
+node src/jobs/candleIngest.mjs
+```
+
+Dit zal:
+- Alle timeframes (1m, 5m, 15m, 60m) backfillen
+- Timestamps correct afronden naar timeframe boundaries
+- Candles upserten in Supabase (geen duplicates)
+- Duidelijke logging per timeframe
+
+#### 2. Continuous Ingest
+
+Voor doorlopende ingest (automatisch vanaf laatste candle in DB):
+
+```bash
+# Set environment variables
+export SYMBOL=BTC-PERPETUAL
+export BACKFILL=false  # of weglaten
+
+# Run ingest
+node src/jobs/candleIngest.mjs
+```
+
+Dit zal:
+- Per timeframe de laatste candle in DB bepalen
+- Nieuwe candles fetchen vanaf de volgende candle tot nu
+- Automatisch timestamps afronden naar timeframe boundaries
+
+#### 3. Dry Run Mode
+
+Test zonder daadwerkelijk naar de database te schrijven:
+
+```bash
+export DRY_RUN=true
+node src/jobs/candleIngest.mjs
+```
+
+#### 4. Environment Variables
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `SYMBOL` | Symbol to ingest | `BTC-PERPETUAL` | No |
+| `BACKFILL` | Enable backfill mode | `false` | No |
+| `BACKFILL_START_TS` | Start timestamp (ISO) | - | Yes if `BACKFILL=true` |
+| `BACKFILL_END_TS` | End timestamp (ISO) | - | Yes if `BACKFILL=true` |
+| `DRY_RUN` | Skip DB writes | `false` | No |
+
+#### 5. Logging
+
+De ingest job logt per timeframe:
+- Aantal opgehaalde candles
+- Eerste en laatste timestamp
+- Aantal inserts/upserts
+- Duur van de operatie
+
+Voorbeeld output:
+```
+[ingest][1m] ✓ Ingested candles: fetched=1440, inserted=1440, range=2026-01-02T00:00:00.000Z -> 2026-01-02T23:59:00.000Z
+[ingest][5m] ✓ Ingested candles: fetched=288, inserted=288, range=2026-01-02T00:00:00.000Z -> 2026-01-02T23:55:00.000Z
+[ingest][15m] ✓ Ingested candles: fetched=96, inserted=96, range=2026-01-02T00:00:00.000Z -> 2026-01-02T23:45:00.000Z
+[ingest][60m] ✓ Ingested candles: fetched=24, inserted=24, range=2026-01-02T00:00:00.000Z -> 2026-01-02T23:00:00.000Z
+```
+
+#### 6. Timestamp Rounding
+
+Alle timestamps worden automatisch afgerond naar timeframe boundaries:
+- **1m**: Rondt af naar minuut (bijv. `12:34:56` → `12:34:00`)
+- **5m**: Rondt af naar 5-minuut boundary (bijv. `12:37:00` → `12:35:00`)
+- **15m**: Rondt af naar 15-minuut boundary (bijv. `12:37:00` → `12:30:00`)
+- **60m**: Rondt af naar uur boundary (bijv. `12:37:00` → `12:00:00`)
+
+Dit zorgt voor consistentie met de database constraints.
+
+#### 7. Error Handling
+
+- **Per timeframe failures**: Als één timeframe faalt, blijven andere timeframes doorgaan
+- **Rate limiting**: Automatische delays tussen API calls
+- **Duplicate prevention**: Upsert gebruikt `ON CONFLICT` op `(symbol, timeframe_min, ts)`
+- **Validation**: Timestamps worden gevalideerd (jaar 2009-2100)
+
+#### 8. Integration with Render
+
+Je kunt de ingest job draaien als een eenmalige job in Render:
+
+1. Maak een **Background Worker** in Render
+2. Set environment variables
+3. Set **Start Command**: `node src/jobs/candleIngest.mjs`
+4. De worker stopt automatisch na voltooiing
+
+Of gebruik een **Cron Job** in Render om periodiek te draaien voor continuous ingest.
+
 ## 🔧 Development
 
 ### Syntax Check
