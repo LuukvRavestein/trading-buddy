@@ -162,21 +162,27 @@ ALTER TABLE public.paper_equity_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.paper_events ENABLE ROW LEVEL SECURITY;
 
 -- Allow service_role full access (service_role bypasses RLS by default, but explicit policy for clarity)
-CREATE POLICY IF NOT EXISTS "service_role_full_access_paper_runs" ON public.paper_runs
+DROP POLICY IF EXISTS "service_role_full_access_paper_runs" ON public.paper_runs;
+CREATE POLICY "service_role_full_access_paper_runs" ON public.paper_runs
   FOR ALL USING (true) WITH CHECK (true);
 
-CREATE POLICY IF NOT EXISTS "service_role_full_access_paper_configs" ON public.paper_configs
+DROP POLICY IF EXISTS "service_role_full_access_paper_configs" ON public.paper_configs;
+CREATE POLICY "service_role_full_access_paper_configs" ON public.paper_configs
   FOR ALL USING (true) WITH CHECK (true);
 
-CREATE POLICY IF NOT EXISTS "service_role_full_access_paper_accounts" ON public.paper_accounts
+DROP POLICY IF EXISTS "service_role_full_access_paper_accounts" ON public.paper_accounts;
+CREATE POLICY "service_role_full_access_paper_accounts" ON public.paper_accounts
   FOR ALL USING (true) WITH CHECK (true);
 
-CREATE POLICY IF NOT EXISTS "service_role_full_access_paper_trades" ON public.paper_trades
+DROP POLICY IF EXISTS "service_role_full_access_paper_trades" ON public.paper_trades;
+CREATE POLICY "service_role_full_access_paper_trades" ON public.paper_trades
   FOR ALL USING (true) WITH CHECK (true);
 
-CREATE POLICY IF NOT EXISTS "service_role_full_access_paper_equity_snapshots" ON public.paper_equity_snapshots
+DROP POLICY IF EXISTS "service_role_full_access_paper_equity_snapshots" ON public.paper_equity_snapshots;
+CREATE POLICY "service_role_full_access_paper_equity_snapshots" ON public.paper_equity_snapshots
   FOR ALL USING (true) WITH CHECK (true);
 
-CREATE POLICY IF NOT EXISTS "service_role_full_access_paper_events" ON public.paper_events
+DROP POLICY IF EXISTS "service_role_full_access_paper_events" ON public.paper_events;
+CREATE POLICY "service_role_full_access_paper_events" ON public.paper_events
   FOR ALL USING (true) WITH CHECK (true);
 
