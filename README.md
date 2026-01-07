@@ -412,6 +412,134 @@ Om terug te gaan naar normale live/paper trading mode:
 - Verwijder `BACKTEST_MODE` environment variable of zet `BACKTEST_MODE=0`
 - De worker zal dan normaal draaien
 
+## 📊 Paper Trading Runner
+
+De bot heeft een live paper trading runner die meerdere strategy configs parallel kan evalueren op Deribit BTC-PERPETUAL op basis van live candle data. De runner simuleert trades per config en slaat resultaten op in Supabase.
+
+### Database Setup
+
+Zorg dat je de paper trading tabellen hebt aangemaakt:
+
+```sql
+-- Run in Supabase SQL Editor
+-- File: supabase/migrations/008_paper_trading.sql
+```
+
+Dit creëert de volgende tabellen:
+- `paper_runs` - Paper run records
+- `paper_configs` - Strategy configs per run (van optimizer of manual)
+- `paper_accounts` - Account state per config (balance, equity, open position)
+- `paper_trades` - Simulated trades
+- `paper_equity_snapshots` - Equity snapshots over tijd
+- `paper_events` - Event log
+
+### Configure Paper Trading Runner
+
+In Render, voeg de volgende environment variables toe:
+
+```bash
+# Required
+PAPER_OPTIMIZER_RUN_ID=<uuid>  # Optimizer run ID om configs van te laden
+
+# Optional
+SYMBOL=BTC-PERPETUAL
+PAPER_TIMEFRAME_MIN=1
+PAPER_BALANCE_START=1000
+PAPER_TOP_N=10  # Aantal top configs om te laden
+PAPER_POLL_SECONDS=15  # Poll interval in seconden
+
+# Kill rules
+PAPER_MIN_TRADES_BEFORE_KILL=50  # Min trades voordat kill rules actief worden
+PAPER_KILL_MAX_DD_PCT=12  # Max drawdown % om te killen
+PAPER_KILL_MIN_PF=0.8  # Min profit factor om te houden
+PAPER_KILL_MIN_PNL_PCT=-2  # Min P&L % om te houden
+
+# Optional: Discord notifications
+DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...
+```
+
+### Run Paper Trading Runner
+
+1. Deploy de worker met `PAPER_OPTIMIZER_RUN_ID` gezet
+2. Set **Start Command**: `node src/jobs/paperTradeRunner.mjs`
+3. De runner zal:
+   - Een `paper_run` aanmaken
+   - Top N configs laden uit `optimizer_run_top_configs`
+   - `paper_accounts` aanmaken voor elke config
+   - Live candles lezen uit de `candles` tabel
+   - Per candle: strategy evalueren, trades openen/sluiten, equity updaten
+   - Kill rules toepassen na minimum aantal trades
+   - Equity snapshots opslaan
+4. De runner stopt automatisch als alle configs gekilled zijn
+
+### Monitoring
+
+**In Supabase SQL Editor:**
+
+```sql
+-- Check active paper runs
+SELECT * FROM paper_runs WHERE status = 'running' ORDER BY started_at DESC;
+
+-- Check active accounts
+SELECT 
+  pc.rank,
+  pa.equity,
+  pa.balance,
+  pa.trades_count,
+  pa.wins_count,
+  pa.losses_count,
+  pa.max_drawdown_pct,
+  pa.profit_factor,
+  pa.last_candle_ts
+FROM paper_accounts pa
+JOIN paper_configs pc ON pa.paper_config_id = pc.id
+WHERE pa.run_id = '<run_id>' AND pc.is_active = true
+ORDER BY pa.equity DESC;
+
+-- Check recent trades
+SELECT 
+  pc.rank,
+  pt.side,
+  pt.entry,
+  pt.exit,
+  pt.pnl_pct,
+  pt.result,
+  pt.opened_ts,
+  pt.closed_ts
+FROM paper_trades pt
+JOIN paper_configs pc ON pt.paper_config_id = pc.id
+WHERE pt.run_id = '<run_id>'
+ORDER BY pt.opened_ts DESC
+LIMIT 50;
+
+-- Check equity curve
+SELECT 
+  pc.rank,
+  pes.ts,
+  pes.equity,
+  pes.dd_pct
+FROM paper_equity_snapshots pes
+JOIN paper_configs pc ON pes.paper_config_id = pc.id
+WHERE pes.run_id = '<run_id>'
+ORDER BY pc.rank, pes.ts ASC;
+```
+
+### Kill Rules
+
+De runner past automatisch kill rules toe na `PAPER_MIN_TRADES_BEFORE_KILL` trades:
+- **Max Drawdown**: Als `max_drawdown_pct > PAPER_KILL_MAX_DD_PCT`, wordt de config gekilled
+- **Profit Factor**: Als `profit_factor < PAPER_KILL_MIN_PF`, wordt de config gekilled
+- **P&L %**: Als `(balance - balance_start) / balance_start * 100 < PAPER_KILL_MIN_PNL_PCT`, wordt de config gekilled
+
+Gekilled configs krijgen `is_active=false` en een `kill_reason` in de `paper_configs` tabel.
+
+### Idempotency
+
+De runner is idempotent:
+- Gebruikt `last_candle_ts` per account als checkpoint
+- Unique constraints voorkomen duplicate trades/snapshots
+- Bij herstart hervat de runner vanaf het laatste checkpoint
+
 ## 📥 Candle Ingest
 
 De bot heeft een robuuste candle ingest oplossing om historische candles van Deribit naar Supabase te halen. Dit is handig voor:
