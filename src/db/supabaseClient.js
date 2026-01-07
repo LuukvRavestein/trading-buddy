@@ -171,7 +171,7 @@ export async function healthCheckStrategyRuns() {
  * @param {object} options - Additional options (filters, etc.)
  * @returns {Promise<object>} Response data
  */
-async function supabaseRequest(method, path, body = null, options = {}) {
+export async function supabaseRequest(method, path, body = null, options = {}) {
   const client = getSupabaseClient();
   if (!client) {
     throw new Error('Supabase not configured');
