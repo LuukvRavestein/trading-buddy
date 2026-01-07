@@ -9,10 +9,18 @@
 -- 3. Paste this entire file
 -- 4. Click "Run" (or Ctrl+Enter)
 
+-- Drop existing tables if they exist (in reverse order due to foreign keys)
+DROP TABLE IF EXISTS public.paper_events CASCADE;
+DROP TABLE IF EXISTS public.paper_equity_snapshots CASCADE;
+DROP TABLE IF EXISTS public.paper_trades CASCADE;
+DROP TABLE IF EXISTS public.paper_accounts CASCADE;
+DROP TABLE IF EXISTS public.paper_configs CASCADE;
+DROP TABLE IF EXISTS public.paper_runs CASCADE;
+
 -- ============================================================================
 -- A) PAPER_RUNS
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS public.paper_runs (
+CREATE TABLE public.paper_runs (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   symbol TEXT NOT NULL,
   timeframe_min INTEGER NOT NULL DEFAULT 1,
@@ -29,7 +37,7 @@ CREATE INDEX IF NOT EXISTS idx_paper_runs_symbol ON public.paper_runs(symbol);
 -- ============================================================================
 -- B) PAPER_CONFIGS
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS public.paper_configs (
+CREATE TABLE public.paper_configs (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   run_id UUID NOT NULL REFERENCES public.paper_runs(id) ON DELETE CASCADE,
   source TEXT NOT NULL,  -- 'optimizer_run_top_configs'|'manual'
@@ -56,7 +64,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_configs_unique
 -- ============================================================================
 -- C) PAPER_ACCOUNTS
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS public.paper_accounts (
+CREATE TABLE public.paper_accounts (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   run_id UUID NOT NULL REFERENCES public.paper_runs(id) ON DELETE CASCADE,
   paper_config_id UUID NOT NULL REFERENCES public.paper_configs(id) ON DELETE CASCADE,
@@ -81,7 +89,7 @@ CREATE INDEX IF NOT EXISTS idx_paper_accounts_last_candle_ts ON public.paper_acc
 -- ============================================================================
 -- D) PAPER_TRADES
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS public.paper_trades (
+CREATE TABLE public.paper_trades (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   run_id UUID NOT NULL REFERENCES public.paper_runs(id) ON DELETE CASCADE,
   paper_config_id UUID NOT NULL REFERENCES public.paper_configs(id) ON DELETE CASCADE,
@@ -115,7 +123,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_trades_unique
 -- ============================================================================
 -- E) PAPER_EQUITY_SNAPSHOTS
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS public.paper_equity_snapshots (
+CREATE TABLE public.paper_equity_snapshots (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   run_id UUID NOT NULL REFERENCES public.paper_runs(id) ON DELETE CASCADE,
   paper_config_id UUID NOT NULL REFERENCES public.paper_configs(id) ON DELETE CASCADE,
@@ -134,7 +142,7 @@ CREATE INDEX IF NOT EXISTS idx_paper_equity_snapshots_paper_config_id ON public.
 -- ============================================================================
 -- F) PAPER_EVENTS
 -- ============================================================================
-CREATE TABLE IF NOT EXISTS public.paper_events (
+CREATE TABLE public.paper_events (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   run_id UUID NOT NULL REFERENCES public.paper_runs(id) ON DELETE CASCADE,
   paper_config_id UUID NULL REFERENCES public.paper_configs(id) ON DELETE SET NULL,
