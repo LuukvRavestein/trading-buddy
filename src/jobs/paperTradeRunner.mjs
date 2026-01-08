@@ -21,7 +21,7 @@
  *   DISCORD_WEBHOOK_URL - Optional Discord webhook URL
  */
 
-import { createPaperRun, updatePaperRun, upsertPaperConfigsFromOptimizerRun, getActivePaperAccounts, upsertAccountCheckpoint, insertTradeOpen, updateTradeClose, upsertEquitySnapshot, killConfig, logEvent } from '../db/paperTradingRepo.mjs';
+import { createPaperRun, updatePaperRun, upsertPaperConfigsFromOptimizerRun, seedPaperAccountsForRun, getActivePaperAccounts, upsertAccountCheckpoint, insertTradeOpen, updateTradeClose, upsertEquitySnapshot, killConfig, logEvent } from '../db/paperTradingRepo.mjs';
 import { openPosition, checkExitOnCandle, closePosition, updateEquityAndDD, calculateMarkToMarketEquity, calculateProfitFactor } from '../trading/paperEngine.mjs';
 import { buildStateCache, evaluateStrategy, loadCandlesForTimeframes } from '../trading/strategyRunner.mjs';
 import { getCandlesBetween, getMaxCandleTs } from '../db/supabaseClient.js';
@@ -369,30 +369,22 @@ async function run() {
       topN: PAPER_TOP_N,
     });
     
-    // 3. Create accounts for configs
+    // 3. Seed accounts for all configs
+    const seededCount = await seedPaperAccountsForRun({
+      runId: paperRunId,
+      balanceStart: PAPER_BALANCE_START,
+    });
+    
+    // 4. Get active accounts
     const accounts = await getActivePaperAccounts({ paperRunId });
-    for (const account of accounts) {
-      if (!account.id) {
-        // Create account if it doesn't exist
-        await upsertAccountCheckpoint({
-          run_id: paperRunId,
-          paper_config_id: account.paper_configs.id,
-          balance_start: PAPER_BALANCE_START,
-          balance: PAPER_BALANCE_START,
-          equity: PAPER_BALANCE_START,
-          max_equity: PAPER_BALANCE_START,
-          max_drawdown_pct: 0,
-          open_position: null,
-          trades_count: 0,
-          wins_count: 0,
-          losses_count: 0,
-          profit_factor: null,
-          last_candle_ts: null,
-        });
-      }
+    
+    if (seededCount === 0 && accounts.length === 0) {
+      console.warn(`[paperRunner] Warning: No accounts created for runId=${paperRunId}. Stopping.`);
+      await updatePaperRun(paperRunId, { status: 'stopped', note: 'No accounts created' });
+      return;
     }
     
-    // 4. Main loop
+    // 5. Main loop
     let lastLeaderboardTime = 0;
     
     while (running) {

@@ -153,6 +153,96 @@ export async function upsertPaperConfigsFromOptimizerRun({ paperRunId, optimizer
 }
 
 /**
+ * Seed paper accounts for a run
+ * Creates one account per paper_config for the given run_id
+ * 
+ * @param {object} options
+ * @param {string} options.runId - Paper run ID
+ * @param {number} options.balanceStart - Starting balance (default: 1000)
+ * @returns {Promise<number>} Number of accounts created/upserted
+ */
+export async function seedPaperAccountsForRun({ runId, balanceStart = 1000 }) {
+  if (!isSupabaseConfigured()) {
+    throw new Error('Supabase not configured');
+  }
+
+  try {
+    // Fetch all paper_config ids for this run
+    const client = getSupabaseClient();
+    const configsUrl = `${client.url}/rest/v1/paper_configs?run_id=eq.${runId}&select=id`;
+    
+    const configsResponse = await fetch(configsUrl, {
+      method: 'GET',
+      headers: {
+        'apikey': client.key,
+        'Authorization': `Bearer ${client.key}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!configsResponse.ok) {
+      const errorText = await configsResponse.text();
+      throw new Error(`Failed to fetch paper configs: ${configsResponse.status} ${errorText}`);
+    }
+
+    const configs = await configsResponse.json();
+    
+    if (!configs || configs.length === 0) {
+      console.log(`[paperRepo] No paper configs found for runId=${runId}, skipping account seeding`);
+      return 0;
+    }
+
+    // Build account rows
+    const accounts = configs.map(config => ({
+      run_id: runId,
+      paper_config_id: config.id,
+      balance_start: balanceStart,
+      balance: balanceStart,
+      equity: balanceStart,
+      max_equity: balanceStart,
+      max_drawdown_pct: 0,
+      open_position: null,
+      trades_count: 0,
+      wins_count: 0,
+      losses_count: 0,
+      profit_factor: 1,
+      last_candle_ts: null,
+    }));
+
+    // Upsert accounts using on_conflict
+    const url = `${client.url}/rest/v1/paper_accounts?on_conflict=run_id,paper_config_id`;
+    
+    const headers = {
+      'apikey': client.key,
+      'Authorization': `Bearer ${client.key}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=representation,resolution=merge-duplicates',
+    };
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(accounts),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Supabase API error: ${response.status} ${errorText.substring(0, 200)}`);
+    }
+
+    const result = await response.json();
+    const insertedOrUpserted = Array.isArray(result) ? result.length : (result ? 1 : 0);
+    
+    console.log(`[paperRepo] Seeding paper accounts: runId=${runId}, configs=${configs.length}, insertedOrUpserted=${insertedOrUpserted}`);
+    
+    return insertedOrUpserted;
+  } catch (error) {
+    console.error('[paperRepo] Failed to seed paper accounts:', error);
+    throw error;
+  }
+}
+
+/**
  * Get active paper accounts for a run
  * 
  * @param {string} paperRunId - Paper run ID
