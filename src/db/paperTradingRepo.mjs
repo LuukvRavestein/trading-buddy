@@ -78,38 +78,109 @@ export async function upsertPaperConfigsFromOptimizerRun({ paperRunId, optimizer
     throw new Error('Supabase not configured');
   }
 
-  // Fetch top configs from optimizer_run_top_configs
   const client = getSupabaseClient();
-  const url = `${client.url}/rest/v1/optimizer_run_top_configs?run_id=eq.${optimizerRunId}&order=rank.asc&limit=${topN}&select=*`;
-  
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'apikey': client.key,
-      'Authorization': `Bearer ${client.key}`,
-      'Content-Type': 'application/json',
-    },
-  });
+  let optimizerConfigs = [];
+  let source = 'optimizer_run_top_configs';
+  let fallbackUsed = false;
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to fetch optimizer configs: ${response.status} ${errorText}`);
+  // Helper function to fetch with service_role
+  const fetchWithServiceRole = async (table, queryParams) => {
+    const url = `${client.url}/rest/v1/${table}?${queryParams}`;
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'apikey': client.key,
+        'Authorization': `Bearer ${client.key}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to fetch ${table}: ${response.status} ${errorText}`);
+    }
+    
+    return await response.json();
+  };
+
+  // First, try optimizer_run_top_configs
+  try {
+    const topConfigsQuery = `run_id=eq.${optimizerRunId}&order=rank.asc&limit=${topN}&select=*`;
+    optimizerConfigs = await fetchWithServiceRole('optimizer_run_top_configs', topConfigsQuery);
+    
+    if (optimizerConfigs && optimizerConfigs.length > 0) {
+      console.log(`[paperRepo] optimizer config source: top_configs, counts=${optimizerConfigs.length}, optimizerRunId=${optimizerRunId}, topN=${topN}`);
+    } else {
+      // Fallback to optimizer_run_configs
+      fallbackUsed = true;
+      source = 'optimizer_run_configs';
+      const runConfigsQuery = `run_id=eq.${optimizerRunId}&order=score.desc&limit=${topN}&select=*`;
+      optimizerConfigs = await fetchWithServiceRole('optimizer_run_configs', runConfigsQuery);
+      
+      if (optimizerConfigs && optimizerConfigs.length > 0) {
+        // Add rank based on order (1-based)
+        optimizerConfigs = optimizerConfigs.map((config, index) => ({
+          ...config,
+          rank: index + 1,
+        }));
+        console.log(`[paperRepo] optimizer config source: run_configs (fallback), counts=${optimizerConfigs.length}, optimizerRunId=${optimizerRunId}, topN=${topN}`);
+      }
+    }
+  } catch (error) {
+    console.error(`[paperRepo] Error fetching from ${source}:`, error);
+    // Continue to check fallback or throw
+    if (!fallbackUsed) {
+      fallbackUsed = true;
+      source = 'optimizer_run_configs';
+      try {
+        const runConfigsQuery = `run_id=eq.${optimizerRunId}&order=score.desc&limit=${topN}&select=*`;
+        optimizerConfigs = await fetchWithServiceRole('optimizer_run_configs', runConfigsQuery);
+        if (optimizerConfigs && optimizerConfigs.length > 0) {
+          optimizerConfigs = optimizerConfigs.map((config, index) => ({
+            ...config,
+            rank: index + 1,
+          }));
+          console.log(`[paperRepo] optimizer config source: run_configs (fallback), counts=${optimizerConfigs.length}, optimizerRunId=${optimizerRunId}, topN=${topN}`);
+        }
+      } catch (fallbackError) {
+        console.error(`[paperRepo] Error fetching from fallback ${source}:`, fallbackError);
+      }
+    }
   }
 
-  const optimizerConfigs = await response.json();
-  
+  // If still no configs, get counts and throw clear error
   if (!optimizerConfigs || optimizerConfigs.length === 0) {
-    throw new Error(`No optimizer configs found for run_id=${optimizerRunId}`);
+    // Get counts for error message
+    let topConfigsCount = 0;
+    let runConfigsCount = 0;
+    
+    try {
+      const topConfigs = await fetchWithServiceRole('optimizer_run_top_configs', `run_id=eq.${optimizerRunId}&select=id`);
+      topConfigsCount = Array.isArray(topConfigs) ? topConfigs.length : 0;
+    } catch (e) {
+      // Ignore
+    }
+    
+    try {
+      const runConfigs = await fetchWithServiceRole('optimizer_run_configs', `run_id=eq.${optimizerRunId}&select=id`);
+      runConfigsCount = Array.isArray(runConfigs) ? runConfigs.length : 0;
+    } catch (e) {
+      // Ignore
+    }
+    
+    throw new Error(
+      `[paperRepo] No optimizer configs found for run_id=${optimizerRunId}. ` +
+      `Counts: optimizer_run_top_configs=${topConfigsCount}, optimizer_run_configs=${runConfigsCount}. ` +
+      `Please choose another optimizer run_id that has saved configs.`
+    );
   }
-
-  console.log(`[paperRepo] Loading ${optimizerConfigs.length} configs from optimizer run ${optimizerRunId}`);
 
   // Upsert paper configs
   const paperConfigs = optimizerConfigs.map(optConfig => ({
     run_id: paperRunId,
-    source: 'optimizer_run_top_configs',
+    source,
     source_run_id: optimizerRunId,
-    rank: optConfig.rank,
+    rank: optConfig.rank || null,
     config: optConfig.config, // JSONB
     is_active: true,
   }));
