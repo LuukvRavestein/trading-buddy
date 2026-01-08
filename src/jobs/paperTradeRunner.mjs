@@ -335,22 +335,47 @@ async function checkKillRules(account, config) {
 }
 
 /**
+ * Validate PAPER_OPTIMIZER_RUN_ID
+ */
+function validateOptimizerRunId(optimizerRunId) {
+  const masked = optimizerRunId ? `${optimizerRunId.substring(0, 8)}...` : '<empty>';
+  
+  // Check if undefined/empty
+  if (!optimizerRunId || optimizerRunId.trim() === '') {
+    console.error(`[paperRunner] PAPER_OPTIMIZER_RUN_ID is required (set it to an optimizer_runs.id UUID). Current value: ${masked}`);
+    throw new Error('[paperRunner] PAPER_OPTIMIZER_RUN_ID is required (set it to an optimizer_runs.id UUID)');
+  }
+  
+  // Check if placeholder (contains <uuid> or angle brackets)
+  const lowerValue = optimizerRunId.toLowerCase();
+  if (lowerValue.includes('<uuid>') || lowerValue.includes('<') || lowerValue.includes('>')) {
+    console.error(`[paperRunner] PAPER_OPTIMIZER_RUN_ID is still a placeholder. Set a real UUID from optimizer_runs.id. Current value: ${masked}`);
+    throw new Error('[paperRunner] PAPER_OPTIMIZER_RUN_ID is still a placeholder. Set a real UUID from optimizer_runs.id');
+  }
+  
+  // Validate UUID format
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(optimizerRunId.trim())) {
+    console.error(`[paperRunner] PAPER_OPTIMIZER_RUN_ID is not a valid UUID: ${optimizerRunId}. Current value: ${masked}`);
+    throw new Error(`[paperRunner] PAPER_OPTIMIZER_RUN_ID is not a valid UUID: ${optimizerRunId}`);
+  }
+}
+
+/**
  * Main runner loop
  */
 async function run() {
+  // Validate PAPER_OPTIMIZER_RUN_ID before any database calls
+  validateOptimizerRunId(PAPER_OPTIMIZER_RUN_ID);
+  
   console.log('[paperRunner] Starting paper trade runner:', {
     SYMBOL,
     PAPER_TIMEFRAME_MIN,
     PAPER_BALANCE_START,
     PAPER_TOP_N,
-    PAPER_OPTIMIZER_RUN_ID,
+    PAPER_OPTIMIZER_RUN_ID: `${PAPER_OPTIMIZER_RUN_ID.substring(0, 8)}...`,
     PAPER_POLL_SECONDS,
   });
-  
-  if (!PAPER_OPTIMIZER_RUN_ID) {
-    console.error('[paperRunner] Error: PAPER_OPTIMIZER_RUN_ID is required');
-    process.exit(1);
-  }
   
   try {
     // 1. Create paper run
