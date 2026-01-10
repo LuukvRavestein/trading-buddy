@@ -220,6 +220,7 @@ export async function ingestCandlesForTimeframe({ symbol, timeframeMin, startTs,
 /**
  * Run candle ingest for all timeframes
  * 
+ * @deprecated Use runIngestIteration() instead for continuous mode
  * @param {object} options
  * @param {string} options.symbol - Symbol (default: BTC-PERPETUAL)
  * @param {string} options.startTs - Start timestamp (ISO string, optional for continuous mode)
@@ -229,19 +230,76 @@ export async function ingestCandlesForTimeframe({ symbol, timeframeMin, startTs,
  * @returns {Promise<object>} Results for all timeframes
  */
 export async function runCandleIngest({ symbol = 'BTC-PERPETUAL', startTs, endTs, backfill = false, dryRun = false }) {
-  console.log(`[ingest] Starting candle ingest:`, {
+  // For backward compatibility, use TIMEFRAMES constant
+  const config = {
     symbol,
+    timeframes: TIMEFRAMES,
+    pollSeconds: 15,
     backfill,
-    dryRun,
     startTs,
     endTs,
-  });
+    dryRun,
+  };
+  
+  return await runIngestIteration(config);
+}
+
+/**
+ * Normalize environment variables with multiple name support
+ */
+function getEnvConfig() {
+  // SYMBOL
+  const symbol = process.env.SYMBOL || 'BTC-PERPETUAL';
+  
+  // TIMEFRAMES: from INGEST_TIMEFRAMES or BACKFILL_TIMEFRAMES (fallback "1,5,15,60")
+  const timeframesStr = process.env.INGEST_TIMEFRAMES || process.env.BACKFILL_TIMEFRAMES || '1,5,15,60';
+  const timeframes = timeframesStr.split(',').map(tf => parseInt(tf.trim(), 10)).filter(tf => !isNaN(tf) && tf > 0);
+  if (timeframes.length === 0) {
+    throw new Error('Invalid TIMEFRAMES: must be comma-separated numbers (e.g., "1,5,15,60")');
+  }
+  
+  // POLL_SECONDS: from INGEST_POLL_SECONDS or POLL_SECONDS (fallback 15)
+  const pollSeconds = parseInt(
+    process.env.INGEST_POLL_SECONDS || process.env.POLL_SECONDS || '15',
+    10
+  );
+  if (isNaN(pollSeconds) || pollSeconds < 1) {
+    throw new Error('Invalid POLL_SECONDS: must be a positive integer');
+  }
+  
+  // BACKFILL mode: enabled if BACKFILL=true OR BACKFILL_MODE=1 OR BACKFILL_MODE=true
+  const backfillEnv = process.env.BACKFILL || process.env.BACKFILL_MODE || 'false';
+  const backfill = backfillEnv === 'true' || backfillEnv === '1';
+  
+  // BACKFILL timestamps
+  const startTs = process.env.BACKFILL_START_TS ? normalizeISO(process.env.BACKFILL_START_TS) : null;
+  const endTs = process.env.BACKFILL_END_TS ? normalizeISO(process.env.BACKFILL_END_TS) : null;
+  
+  // DRY_RUN
+  const dryRun = process.env.DRY_RUN === 'true' || process.env.DRY_RUN === '1';
+  
+  return {
+    symbol,
+    timeframes,
+    pollSeconds,
+    backfill,
+    startTs,
+    endTs,
+    dryRun,
+  };
+}
+
+/**
+ * Run a single ingest iteration for all timeframes
+ */
+async function runIngestIteration(config) {
+  const { symbol, timeframes, backfill, startTs, endTs, dryRun } = config;
   
   const results = {};
   const errors = {};
   
   // Determine ingest range for each timeframe
-  for (const timeframeMin of TIMEFRAMES) {
+  for (const timeframeMin of timeframes) {
     try {
       let ingestStartTs = startTs;
       let ingestEndTs = endTs;
@@ -264,26 +322,15 @@ export async function runCandleIngest({ symbol = 'BTC-PERPETUAL', startTs, endTs
         // End at current time, rounded to timeframe
         const now = new Date();
         ingestEndTs = roundTsToTimeframe(now.toISOString(), timeframeMin);
-        
-        console.log(`[ingest][${timeframeMin}m] Continuous mode:`, {
-          maxTs,
-          ingestStartTs,
-          ingestEndTs,
-        });
       } else {
         // Backfill mode: use explicit range
         if (!ingestStartTs || !ingestEndTs) {
-          throw new Error(`Backfill mode requires startTs and endTs`);
+          throw new Error(`Backfill mode requires BACKFILL_START_TS and BACKFILL_END_TS`);
         }
         
         // Round to timeframe boundaries
         ingestStartTs = roundTsToTimeframe(ingestStartTs, timeframeMin);
         ingestEndTs = roundTsToTimeframe(ingestEndTs, timeframeMin);
-        
-        console.log(`[ingest][${timeframeMin}m] Backfill mode:`, {
-          ingestStartTs,
-          ingestEndTs,
-        });
       }
       
       // Validate range
@@ -313,12 +360,26 @@ export async function runCandleIngest({ symbol = 'BTC-PERPETUAL', startTs, endTs
       
       results[timeframeMin] = result;
       
+      // Get max ts in DB after ingest (for logging)
+      let maxTsAfter = null;
+      try {
+        maxTsAfter = await getMaxCandleTs({ symbol, timeframeMin });
+      } catch (e) {
+        // Ignore errors getting max ts
+      }
+      
+      console.log(`[ingest][${timeframeMin}m] Loop iteration complete:`, {
+        fetched: result.fetched,
+        inserted: result.inserted,
+        maxTsAfter,
+      });
+      
       // Rate limiting: small delay between timeframes
-      if (timeframeMin !== TIMEFRAMES[TIMEFRAMES.length - 1]) {
+      if (timeframeMin !== timeframes[timeframes.length - 1]) {
         await new Promise(resolve => setTimeout(resolve, 500));
       }
     } catch (error) {
-      console.error(`[ingest][${timeframeMin}m] Error:`, error.message);
+      console.error(`[ingest][${timeframeMin}m] Error in iteration:`, error.message);
       errors[timeframeMin] = error.message;
       results[timeframeMin] = {
         timeframeMin,
@@ -333,10 +394,8 @@ export async function runCandleIngest({ symbol = 'BTC-PERPETUAL', startTs, endTs
   const totalFetched = Object.values(results).reduce((sum, r) => sum + (r.fetched || 0), 0);
   const totalInserted = Object.values(results).reduce((sum, r) => sum + (r.inserted || 0), 0);
   
-  console.log(`[ingest] Ingest complete:`, {
+  console.log(`[ingest] Iteration complete:`, {
     symbol,
-    backfill,
-    dryRun,
     totalFetched,
     totalInserted,
     timeframes: Object.keys(results).map(tf => {
@@ -348,8 +407,6 @@ export async function runCandleIngest({ symbol = 'BTC-PERPETUAL', startTs, endTs
   
   return {
     symbol,
-    backfill,
-    dryRun,
     results,
     errors: Object.keys(errors).length > 0 ? errors : null,
     totals: {
@@ -363,46 +420,86 @@ export async function runCandleIngest({ symbol = 'BTC-PERPETUAL', startTs, endTs
  * CLI entry point
  */
 async function main() {
-  const symbol = process.env.SYMBOL || 'BTC-PERPETUAL';
-  const backfill = process.env.BACKFILL === 'true';
-  const dryRun = process.env.DRY_RUN === 'true';
-  const startTs = process.env.BACKFILL_START_TS ? normalizeISO(process.env.BACKFILL_START_TS) : null;
-  const endTs = process.env.BACKFILL_END_TS ? normalizeISO(process.env.BACKFILL_END_TS) : null;
-  
-  console.log(`[ingest] CLI starting:`, {
-    symbol,
-    backfill,
-    dryRun,
-    startTs,
-    endTs,
-  });
-  
-  if (backfill && (!startTs || !endTs)) {
-    console.error(`[ingest] Error: BACKFILL=true requires BACKFILL_START_TS and BACKFILL_END_TS`);
+  let config;
+  try {
+    config = getEnvConfig();
+  } catch (error) {
+    console.error(`[ingest] Configuration error:`, error.message);
     process.exit(1);
   }
   
-  try {
-    const result = await runCandleIngest({
-      symbol,
-      startTs,
-      endTs,
-      backfill,
-      dryRun,
-    });
-    
-    // Exit with error code if any timeframes failed
-    if (result.errors && Object.keys(result.errors).length > 0) {
-      console.error(`[ingest] Some timeframes failed:`, result.errors);
+  const { symbol, timeframes, pollSeconds, backfill, startTs, endTs, dryRun } = config;
+  
+  // Startup logging
+  console.log(`[ingest] Starting candle ingest worker:`, {
+    symbol,
+    timeframes: timeframes.join(','),
+    pollSeconds,
+    mode: backfill ? 'backfill' : 'continuous',
+    dryRun,
+    startTs: backfill ? startTs : null,
+    endTs: backfill ? endTs : null,
+  });
+  
+  // Validate backfill mode
+  if (backfill && (!startTs || !endTs)) {
+    console.error(`[ingest] Error: BACKFILL mode requires BACKFILL_START_TS and BACKFILL_END_TS`);
+    process.exit(1);
+  }
+  
+  // Backfill mode: run once and exit
+  if (backfill) {
+    try {
+      const result = await runIngestIteration(config);
+      
+      // Exit with error code if any timeframes failed
+      if (result.errors && Object.keys(result.errors).length > 0) {
+        console.error(`[ingest] Some timeframes failed:`, result.errors);
+        process.exit(1);
+      }
+      
+      console.log(`[ingest] ✓ Backfill complete successfully`);
+      process.exit(0);
+    } catch (error) {
+      console.error(`[ingest] ✗ Fatal error:`, error.message);
+      console.error(error.stack);
       process.exit(1);
     }
+  }
+  
+  // Continuous mode: run forever
+  console.log(`[ingest] Entering continuous mode (polling every ${pollSeconds}s)`);
+  
+  let iterationCount = 0;
+  let lastError = null;
+  
+  while (true) {
+    iterationCount++;
+    const iterationStart = Date.now();
     
-    console.log(`[ingest] ✓ Ingest complete successfully`);
-    process.exit(0);
-  } catch (error) {
-    console.error(`[ingest] ✗ Fatal error:`, error.message);
-    console.error(error.stack);
-    process.exit(1);
+    try {
+      console.log(`[ingest] Starting iteration #${iterationCount}`);
+      const result = await runIngestIteration(config);
+      
+      // Log iteration summary
+      const durationMs = Date.now() - iterationStart;
+      console.log(`[ingest] Iteration #${iterationCount} complete in ${durationMs}ms:`, {
+        fetched: result.totals.fetched,
+        inserted: result.totals.inserted,
+        errors: result.errors ? Object.keys(result.errors).length : 0,
+      });
+      
+      lastError = null;
+    } catch (error) {
+      // Log error but continue to next iteration
+      console.error(`[ingest] Iteration #${iterationCount} failed:`, error.message);
+      console.error(`[ingest] Error stack:`, error.stack);
+      lastError = error;
+    }
+    
+    // Wait before next iteration
+    console.log(`[ingest] Waiting ${pollSeconds}s before next iteration...`);
+    await new Promise(resolve => setTimeout(resolve, pollSeconds * 1000));
   }
 }
 
