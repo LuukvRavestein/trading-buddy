@@ -56,6 +56,20 @@ export function roundTsToTimeframe(ts, timeframeMin) {
 }
 
 /**
+ * Floor timestamp to timeframe boundary (never rounds up)
+ * 
+ * This is an alias for roundTsToTimeframe, but explicitly named to indicate
+ * it always floors (never rounds up) to the timeframe boundary.
+ * 
+ * @param {string|number|Date} ts - Timestamp (ISO string, milliseconds, or Date)
+ * @param {number} timeframeMin - Timeframe in minutes
+ * @returns {string} ISO timestamp floored to timeframe boundary
+ */
+export function floorToTimeframe(ts, timeframeMin) {
+  return roundTsToTimeframe(ts, timeframeMin);
+}
+
+/**
  * Convert candle from Deribit format to Supabase format
  * 
  * @param {object} candle - Deribit candle {t, o, h, l, c, v}
@@ -303,25 +317,38 @@ async function runIngestIteration(config) {
     try {
       let ingestStartTs = startTs;
       let ingestEndTs = endTs;
+      const nowUtc = new Date();
+      const nowUtcIso = nowUtc.toISOString();
       
       if (!backfill) {
-        // Continuous mode: determine range from DB
-        const maxTs = await getMaxCandleTs({ symbol, timeframeMin });
+        // Continuous mode: determine range from current time and DB
+        const maxTsInDb = await getMaxCandleTs({ symbol, timeframeMin });
         
-        if (maxTs) {
+        // Compute endTs: most recent CLOSED candle timestamp
+        // endTs = floorToTimeframe(now - T minutes)
+        const nowMinusTimeframe = new Date(nowUtc.getTime() - (timeframeMin * 60 * 1000));
+        ingestEndTs = floorToTimeframe(nowMinusTimeframe.toISOString(), timeframeMin);
+        
+        // Compute startTs
+        if (maxTsInDb) {
           // Start from next candle after maxTs
-          const maxDate = new Date(maxTs);
+          const maxDate = new Date(maxTsInDb);
           const nextCandleMs = maxDate.getTime() + (timeframeMin * 60 * 1000);
           ingestStartTs = new Date(nextCandleMs).toISOString();
         } else {
-          // No data in DB, start from 1 day ago
-          const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-          ingestStartTs = roundTsToTimeframe(oneDayAgo.toISOString(), timeframeMin);
+          // No data in DB, start from 24h ago (floored to timeframe)
+          const oneDayAgo = new Date(nowUtc.getTime() - 24 * 60 * 60 * 1000);
+          ingestStartTs = floorToTimeframe(oneDayAgo.toISOString(), timeframeMin);
         }
         
-        // End at current time, rounded to timeframe
-        const now = new Date();
-        ingestEndTs = roundTsToTimeframe(now.toISOString(), timeframeMin);
+        // Log per-timeframe computed values
+        console.log(`[ingest][${timeframeMin}m] Computed range:`, {
+          timeframeMin,
+          maxTsInDb,
+          computedStartTs: ingestStartTs,
+          computedEndTs: ingestEndTs,
+          nowUtcIso,
+        });
       } else {
         // Backfill mode: use explicit range
         if (!ingestStartTs || !ingestEndTs) {
@@ -338,7 +365,13 @@ async function runIngestIteration(config) {
       const endMs = new Date(ingestEndTs).getTime();
       
       if (startMs >= endMs) {
-        console.warn(`[ingest][${timeframeMin}m] Skipping: startTs >= endTs (${ingestStartTs} >= ${ingestEndTs})`);
+        if (!backfill) {
+          // Continuous mode: no new closed candles yet
+          console.log(`[ingest][${timeframeMin}m] No new closed candles yet (startTs > endTs). Waiting...`);
+        } else {
+          // Backfill mode: log warning
+          console.warn(`[ingest][${timeframeMin}m] Skipping: startTs >= endTs (${ingestStartTs} >= ${ingestEndTs})`);
+        }
         results[timeframeMin] = {
           timeframeMin,
           fetched: 0,
