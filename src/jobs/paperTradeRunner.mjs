@@ -423,7 +423,8 @@ async function run() {
           break;
         }
         
-        // Compute maxTs and safeEndTs (excluding newest forming candle)
+        // Compute maxTs and safeEndTs
+        // maxTs always points to last CLOSED candle (ingest ensures this)
         const maxTs = await getMaxCandleTs({ symbol: SYMBOL, timeframeMin: PAPER_TIMEFRAME_MIN });
         
         if (!maxTs) {
@@ -432,8 +433,8 @@ async function run() {
           continue;
         }
         
-        // safeEndTs = maxTs - PAPER_TIMEFRAME_MIN (exclude the newest forming candle)
-        const safeEndTs = addMinutesISO(normalizeISO(maxTs), -PAPER_TIMEFRAME_MIN);
+        // safeEndTs = maxTs (maxTs is already the last closed candle)
+        const safeEndTs = normalizeISO(maxTs);
         
         // Find min(last_candle_ts) across accounts for logging
         const lastCandleTsList = activeAccounts

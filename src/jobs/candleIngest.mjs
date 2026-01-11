@@ -17,7 +17,7 @@
 
 import { getCandles } from '../exchanges/deribitClient.mjs';
 import { upsertCandles, getMaxCandleTs } from '../db/supabaseClient.js';
-import { normalizeISO } from '../utils/time.mjs';
+import { normalizeISO, addMinutesISO } from '../utils/time.mjs';
 
 // Supported timeframes
 const TIMEFRAMES = [1, 5, 15, 60];
@@ -324,10 +324,10 @@ async function runIngestIteration(config) {
         // Continuous mode: determine range from current time and DB
         const maxTsInDb = await getMaxCandleTs({ symbol, timeframeMin });
         
-        // Compute endTs: most recent CLOSED candle timestamp
-        // endTs = floorToTimeframe(now - T minutes)
-        const nowMinusTimeframe = new Date(nowUtc.getTime() - (timeframeMin * 60 * 1000));
-        ingestEndTs = floorToTimeframe(nowMinusTimeframe.toISOString(), timeframeMin);
+        // Compute endTsSafe: most recent CLOSED candle timestamp
+        // endTsSafe = floorToTimeframe(now, timeframeMin) - timeframeMin minutes
+        const floorNow = roundTsToTimeframe(nowUtcIso, timeframeMin);
+        ingestEndTs = addMinutesISO(floorNow, -timeframeMin);
         
         // Compute startTs
         if (maxTsInDb) {
@@ -342,13 +342,7 @@ async function runIngestIteration(config) {
         }
         
         // Log per-timeframe computed values
-        console.log(`[ingest][${timeframeMin}m] Computed range:`, {
-          timeframeMin,
-          maxTsInDb,
-          computedStartTs: ingestStartTs,
-          computedEndTs: ingestEndTs,
-          nowUtcIso,
-        });
+        console.log(`[ingest][${timeframeMin}m] endTsSafe=${ingestEndTs} now=${nowUtcIso} startTs=${ingestStartTs}`);
       } else {
         // Backfill mode: use explicit range
         if (!ingestStartTs || !ingestEndTs) {
