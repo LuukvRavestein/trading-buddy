@@ -44,6 +44,49 @@ const PAPER_RUN_ID = process.env.PAPER_RUN_ID; // Optional: resume existing run
 let shouldStop = false;
 
 /**
+ * Convert timestamp to epoch milliseconds
+ * 
+ * @param {string|Date|null} ts - Timestamp (ISO string, Date, or null)
+ * @returns {number|null} Epoch milliseconds or null
+ */
+function toMs(ts) {
+  if (ts === null || ts === undefined) {
+    return null;
+  }
+  if (ts instanceof Date) {
+    return ts.getTime();
+  }
+  if (typeof ts === 'string') {
+    const date = new Date(ts);
+    if (isNaN(date.getTime())) {
+      return null;
+    }
+    return date.getTime();
+  }
+  return null;
+}
+
+/**
+ * Convert epoch milliseconds to ISO string
+ * 
+ * @param {number} ms - Epoch milliseconds
+ * @returns {string} ISO timestamp string
+ */
+function toIso(ms) {
+  return new Date(ms).toISOString();
+}
+
+/**
+ * Round down to nearest minute boundary
+ * 
+ * @param {number} ms - Epoch milliseconds
+ * @returns {number} Milliseconds rounded down to minute boundary
+ */
+function roundDownToMinuteMs(ms) {
+  return ms - (ms % 60000);
+}
+
+/**
  * Post message to Discord webhook
  */
 async function postDiscord(message) {
@@ -492,27 +535,33 @@ async function pollLoop(ctx) {
           continue;
         }
         
-        // safeEndTs = maxTs (maxTs is always the last closed candle, ingest ensures this)
-        const safeEndTs = normalizeISO(maxTs);
-        
-        // Verify safeEndTs equals maxTs (consistency check)
-        if (safeEndTs !== maxTs) {
-          console.warn(`[paperRunner] WARNING: safeEndTs (${safeEndTs}) != maxTs (${maxTs}), using maxTs`);
+        // Convert maxTs to milliseconds and round down to minute boundary
+        const maxTsMs = roundDownToMinuteMs(toMs(maxTs));
+        if (maxTsMs === null) {
+          console.error('[paperRunner] Invalid maxTs, skipping iteration');
+          await sleep(PAPER_POLL_SECONDS * 1000);
+          continue;
         }
         
-        // Find min(last_candle_ts) across accounts for logging
-        const lastCandleTsList = activeAccounts
-          .map(acc => acc.last_candle_ts)
-          .filter(ts => ts !== null);
-        const minLastCandleTs = lastCandleTsList.length > 0
-          ? lastCandleTsList.reduce((min, ts) => ts < min ? ts : min, lastCandleTsList[0])
-          : null;
+        // Compute safeEndMs with 1 candle buffer (exclude newest forming candle)
+        const safeEndMs = maxTsMs - (PAPER_TIMEFRAME_MIN * 60_000);
+        const safeEndTs = toIso(safeEndMs);
         
-        // Log loop start
+        // Find min(last_candle_ts) across accounts for logging (in ms)
+        const lastCandleTsList = activeAccounts
+          .map(acc => toMs(acc.last_candle_ts))
+          .filter(ms => ms !== null);
+        const minLastCandleTsMs = lastCandleTsList.length > 0
+          ? Math.min(...lastCandleTsList)
+          : null;
+        const minLastCandleTs = minLastCandleTsMs ? toIso(minLastCandleTsMs) : null;
+        
+        // Log loop start (debug with numeric ms + iso)
         console.log('[paperRunner] Loop start:', {
-          maxTs,
+          maxTs: toIso(maxTsMs),
+          maxTsMs,
           safeEndTs,
-          safeEndTsEqualsMaxTs: safeEndTs === maxTs,
+          safeEndMs,
           minLastCandleTs,
           activeAccounts: activeAccounts.length,
         });
@@ -533,33 +582,37 @@ async function pollLoop(ctx) {
           const config = account.paper_configs.config;
           const accountId = account.id;
           
-          // Compute startTs for this account
-          const startTs = account.last_candle_ts
-            ? addMinutesISO(normalizeISO(account.last_candle_ts), PAPER_TIMEFRAME_MIN)
-            : null;
+          // Compute startMs for this account (in milliseconds)
+          const lastCandleMs = toMs(account.last_candle_ts);
+          const startMs = lastCandleMs
+            ? lastCandleMs + (PAPER_TIMEFRAME_MIN * 60_000)
+            : safeEndMs - (24 * 60 * 60_000); // Default: 24h ago
           
-          // If no last_candle_ts, start from safeEndTs - 24h (or a reasonable default)
-          if (!startTs) {
-            const defaultStart = addMinutesISO(safeEndTs, -24 * 60);
-            console.log(`[paperRunner] Account ${accountId} has no last_candle_ts, starting from ${defaultStart}`);
+          // If no last_candle_ts, log default start
+          if (!lastCandleMs) {
+            console.log(`[paperRunner] Account ${accountId} has no last_candle_ts, starting from ${toIso(startMs)}`);
           }
           
-          // Skip if startTs >= safeEndTs (no new candles)
-          if (startTs && new Date(startTs).getTime() >= new Date(safeEndTs).getTime()) {
-            console.log(`[paperRunner] No new candles for account ${accountId} (startTs >= safeEndTs):`, {
-              startTs,
+          // Skip if startMs >= safeEndMs (no new candles) - compare as numbers
+          if (startMs >= safeEndMs) {
+            console.log(`[paperRunner] No new candles for account ${accountId} (startMs >= safeEndMs):`, {
+              startTs: toIso(startMs),
+              startMs,
               safeEndTs,
+              safeEndMs,
             });
             continue;
           }
           
-          // Determine actual startTs
-          const actualStartTs = startTs || addMinutesISO(safeEndTs, -24 * 60);
+          // Convert to ISO for DB queries
+          const actualStartTs = toIso(startMs);
           
           // Log per-account processing
           console.log(`[paperRunner] Processing account ${accountId}:`, {
             startTs: actualStartTs,
+            startMs,
             safeEndTs,
+            safeEndMs,
             lastCandleTs: account.last_candle_ts,
           });
           
