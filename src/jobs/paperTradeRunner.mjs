@@ -39,9 +39,9 @@ const PAPER_KILL_MAX_DD_PCT = parseFloat(process.env.PAPER_KILL_MAX_DD_PCT || '1
 const PAPER_KILL_MIN_PF = parseFloat(process.env.PAPER_KILL_MIN_PF || '0.8', 10);
 const PAPER_KILL_MIN_PNL_PCT = parseFloat(process.env.PAPER_KILL_MIN_PNL_PCT || '-2', 10);
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+const PAPER_RUN_ID = process.env.PAPER_RUN_ID; // Optional: resume existing run
 
-let paperRunId = null;
-let running = true;
+let shouldStop = false;
 
 /**
  * Post message to Discord webhook
@@ -63,25 +63,59 @@ async function postDiscord(message) {
 }
 
 /**
- * Get next candle timestamp per account
+ * Load candles with pagination/chunking
+ * 
+ * @param {object} options
+ * @param {string} options.symbol - Symbol
+ * @param {number} options.timeframeMin - Timeframe in minutes
+ * @param {string} options.startTs - Start timestamp (ISO)
+ * @param {string} options.endTs - End timestamp (ISO)
+ * @param {number} options.pageSize - Page size (default: 1000)
+ * @returns {Promise<Array>} All candles in range
  */
-function getNextCandleTs(accounts) {
-  if (accounts.length === 0) {
-    return null;
+async function loadCandlesPaged({ symbol, timeframeMin, startTs, endTs, pageSize = 1000 }) {
+  const allCandles = [];
+  let currentStartTs = startTs;
+  
+  while (true) {
+    if (shouldStop) {
+      break;
+    }
+    
+    const candles = await getCandlesBetween({
+      symbol,
+      timeframeMin,
+      startTs: currentStartTs,
+      endTs,
+      limit: pageSize,
+    });
+    
+    if (candles.length === 0) {
+      break;
+    }
+    
+    allCandles.push(...candles);
+    
+    // Get last candle timestamp
+    const lastCandle = candles[candles.length - 1];
+    const lastTs = new Date(lastCandle.ts).getTime();
+    const endTsMs = new Date(endTs).getTime();
+    
+    // If we've reached or passed endTs, stop
+    if (lastTs >= endTsMs) {
+      break;
+    }
+    
+    // Next start is lastTs + timeframeMin minutes
+    currentStartTs = addMinutesISO(normalizeISO(lastCandle.ts), timeframeMin);
+    
+    // Safety check: if next start >= endTs, stop
+    if (new Date(currentStartTs).getTime() >= endTsMs) {
+      break;
+    }
   }
   
-  const timestamps = accounts
-    .map(acc => acc.last_candle_ts ? new Date(acc.last_candle_ts).getTime() : 0)
-    .filter(ts => ts > 0);
-  
-  if (timestamps.length === 0) {
-    // No checkpoints, start from 1 day ago
-    return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  }
-  
-  const minTs = Math.min(...timestamps);
-  // Next candle is minTs + 1 minute
-  return new Date(minTs + 60 * 1000).toISOString();
+  return allCandles;
 }
 
 /**
@@ -362,9 +396,9 @@ function validateOptimizerRunId(optimizerRunId) {
 }
 
 /**
- * Main runner loop
+ * Initialize paper run and accounts (runs once at startup)
  */
-async function run() {
+async function initPaperRunAndAccounts() {
   // Validate PAPER_OPTIMIZER_RUN_ID before any database calls
   validateOptimizerRunId(PAPER_OPTIMIZER_RUN_ID);
   
@@ -375,44 +409,69 @@ async function run() {
     PAPER_TOP_N,
     PAPER_OPTIMIZER_RUN_ID: `${PAPER_OPTIMIZER_RUN_ID.substring(0, 8)}...`,
     PAPER_POLL_SECONDS,
+    PAPER_RUN_ID: PAPER_RUN_ID || '<new run>',
   });
   
-  try {
-    // 1. Create paper run
-    const paperRun = await createPaperRun({
-      symbol: SYMBOL,
-      timeframeMin: PAPER_TIMEFRAME_MIN,
-      note: `Paper trading run for optimizer ${PAPER_OPTIMIZER_RUN_ID}`,
-    });
-    paperRunId = paperRun.id;
-    console.log(`[paperRunner] Created paper run: ${paperRunId}`);
+  let paperRunId;
+  
+  // If PAPER_RUN_ID is provided, resume that run
+  if (PAPER_RUN_ID) {
+    paperRunId = PAPER_RUN_ID;
+    console.log(`[paperRunner] Resuming existing paper run: ${paperRunId}`);
     
-    // 2. Load configs from optimizer
-    await upsertPaperConfigsFromOptimizerRun({
-      paperRunId,
-      optimizerRunId: PAPER_OPTIMIZER_RUN_ID,
-      topN: PAPER_TOP_N,
-    });
-    
-    // 3. Seed accounts for all configs
-    const seededCount = await seedPaperAccountsForRun({
-      runId: paperRunId,
-      balanceStart: PAPER_BALANCE_START,
-    });
-    
-    // 4. Get active accounts
+    // Verify run exists and get active accounts
     const accounts = await getActivePaperAccounts({ paperRunId });
-    
-    if (seededCount === 0 && accounts.length === 0) {
-      console.warn(`[paperRunner] Warning: No accounts created for runId=${paperRunId}. Stopping.`);
-      await updatePaperRun(paperRunId, { status: 'stopped', note: 'No accounts created' });
-      return;
+    if (accounts.length === 0) {
+      throw new Error(`No active accounts found for runId=${paperRunId}`);
     }
     
-    // 5. Main loop
-    let lastLeaderboardTime = 0;
-    
-    while (running) {
+    console.log(`[paperRunner] Found ${accounts.length} active accounts for run ${paperRunId}`);
+    return { paperRunId, symbol: SYMBOL };
+  }
+  
+  // Otherwise, create new run
+  const paperRun = await createPaperRun({
+    symbol: SYMBOL,
+    timeframeMin: PAPER_TIMEFRAME_MIN,
+    note: `Paper trading run for optimizer ${PAPER_OPTIMIZER_RUN_ID}`,
+  });
+  paperRunId = paperRun.id;
+  console.log(`[paperRunner] Created paper run: ${paperRunId}`);
+  
+  // Load configs from optimizer
+  await upsertPaperConfigsFromOptimizerRun({
+    paperRunId,
+    optimizerRunId: PAPER_OPTIMIZER_RUN_ID,
+    topN: PAPER_TOP_N,
+  });
+  
+  // Seed accounts for all configs
+  const seededCount = await seedPaperAccountsForRun({
+    runId: paperRunId,
+    balanceStart: PAPER_BALANCE_START,
+  });
+  
+  // Get active accounts
+  const accounts = await getActivePaperAccounts({ paperRunId });
+  
+  if (seededCount === 0 && accounts.length === 0) {
+    throw new Error(`No accounts created for runId=${paperRunId}`);
+  }
+  
+  console.log(`[paperRunner] Initialized: ${accounts.length} active accounts`);
+  
+  return { paperRunId, symbol: SYMBOL };
+}
+
+/**
+ * Main poll loop
+ */
+async function pollLoop(ctx) {
+  const { paperRunId } = ctx;
+  let lastLeaderboardTime = 0;
+  
+  try {
+    while (!shouldStop) {
       try {
         // Get active accounts
         const activeAccounts = await getActivePaperAccounts({ paperRunId });
@@ -433,8 +492,13 @@ async function run() {
           continue;
         }
         
-        // safeEndTs = maxTs (maxTs is already the last closed candle)
+        // safeEndTs = maxTs (maxTs is always the last closed candle, ingest ensures this)
         const safeEndTs = normalizeISO(maxTs);
+        
+        // Verify safeEndTs equals maxTs (consistency check)
+        if (safeEndTs !== maxTs) {
+          console.warn(`[paperRunner] WARNING: safeEndTs (${safeEndTs}) != maxTs (${maxTs}), using maxTs`);
+        }
         
         // Find min(last_candle_ts) across accounts for logging
         const lastCandleTsList = activeAccounts
@@ -448,6 +512,7 @@ async function run() {
         console.log('[paperRunner] Loop start:', {
           maxTs,
           safeEndTs,
+          safeEndTsEqualsMaxTs: safeEndTs === maxTs,
           minLastCandleTs,
           activeAccounts: activeAccounts.length,
         });
@@ -457,6 +522,10 @@ async function run() {
         let totalTradesClosed = 0;
         
         for (const account of activeAccounts) {
+          if (shouldStop) {
+            break;
+          }
+          
           if (!account.paper_configs || !account.paper_configs.is_active) {
             continue;
           }
@@ -473,7 +542,6 @@ async function run() {
           if (!startTs) {
             const defaultStart = addMinutesISO(safeEndTs, -24 * 60);
             console.log(`[paperRunner] Account ${accountId} has no last_candle_ts, starting from ${defaultStart}`);
-            // We'll set this after first successful process
           }
           
           // Skip if startTs >= safeEndTs (no new candles)
@@ -495,13 +563,13 @@ async function run() {
             lastCandleTs: account.last_candle_ts,
           });
           
-          // Load candles for this account's range
-          const candles = await getCandlesBetween({
+          // Load candles with pagination to catch up fully
+          const candles = await loadCandlesPaged({
             symbol: SYMBOL,
             timeframeMin: PAPER_TIMEFRAME_MIN,
             startTs: actualStartTs,
             endTs: safeEndTs,
-            limit: 10000, // Allow large batches for backlog processing
+            pageSize: 1000,
           });
           
           if (candles.length === 0) {
@@ -509,7 +577,7 @@ async function run() {
             continue;
           }
           
-          console.log(`[paperRunner] Loaded ${candles.length} candles for account ${accountId}`);
+          console.log(`[paperRunner] Loaded ${candles.length} candles for account ${accountId} (paginated)`);
           
           // Load candles for all timeframes (needed for state cache)
           const allCandles = await loadCandlesForTimeframes({
@@ -523,7 +591,19 @@ async function run() {
           let accountTradesOpened = 0;
           let accountTradesClosed = 0;
           
-          for (const candle of candles) {
+          // Process candles in batches, updating checkpoint after each batch
+          const BATCH_SIZE = 100;
+          for (let i = 0; i < candles.length; i += BATCH_SIZE) {
+            if (shouldStop) {
+              break;
+            }
+            
+            const batch = candles.slice(i, i + BATCH_SIZE);
+            
+            for (const candle of batch) {
+              if (shouldStop) {
+                break;
+              }
             const candleObj = {
               t: new Date(candle.ts).getTime(),
               o: parseFloat(candle.open),
@@ -590,32 +670,34 @@ async function run() {
               // Continue to next candle, but don't update lastProcessedTs
               continue;
             }
-          }
-          
-          // Update last_candle_ts checkpoint after successful processing
-          if (lastProcessedTs && lastProcessedTs !== account.last_candle_ts) {
-            try {
-              await upsertAccountCheckpoint({
-                id: accountId,
-                run_id: paperRunId,
-                paper_config_id: account.paper_configs.id,
-                balance: account.balance,
-                equity: account.equity,
-                max_equity: account.max_equity,
-                max_drawdown_pct: account.max_drawdown_pct,
-                open_position: account.open_position,
-                trades_count: account.trades_count,
-                wins_count: account.wins_count,
-                losses_count: account.losses_count,
-                profit_factor: account.profit_factor,
-                last_candle_ts: lastProcessedTs,
-              });
-              
-              // Update local reference
-              account.last_candle_ts = lastProcessedTs;
-            } catch (error) {
-              console.error(`[paperRunner] Failed to update checkpoint for account ${accountId}:`, error.message);
-              // Don't throw - we'll retry next iteration
+            }
+            
+            // Update checkpoint after each batch (idempotency)
+            if (lastProcessedTs && lastProcessedTs !== account.last_candle_ts) {
+              try {
+                await upsertAccountCheckpoint({
+                  id: accountId,
+                  run_id: paperRunId,
+                  paper_config_id: account.paper_configs.id,
+                  balance: account.balance,
+                  equity: account.equity,
+                  max_equity: account.max_equity,
+                  max_drawdown_pct: account.max_drawdown_pct,
+                  open_position: account.open_position,
+                  trades_count: account.trades_count,
+                  wins_count: account.wins_count,
+                  losses_count: account.losses_count,
+                  profit_factor: account.profit_factor,
+                  last_candle_ts: lastProcessedTs,
+                });
+                
+                // Update local reference
+                account.last_candle_ts = lastProcessedTs;
+              } catch (error) {
+                console.error(`[paperRunner] Failed to update checkpoint for account ${accountId}:`, error.message);
+                // Don't throw - we'll retry next iteration, but stop processing this batch
+                break;
+              }
             }
           }
           
@@ -656,15 +738,41 @@ async function run() {
         // Sleep before next poll
         await sleep(PAPER_POLL_SECONDS * 1000);
       } catch (error) {
-        console.error('[paperRunner] Error in main loop:', error);
+        console.error('[paperRunner] Error in poll loop:', error);
         await logEvent({
           runId: paperRunId,
           level: 'error',
-          message: `Error in main loop: ${error.message}`,
+          message: `Error in poll loop: ${error.message}`,
           payload: { error: error.stack },
         });
         await sleep(PAPER_POLL_SECONDS * 1000);
       }
+    }
+    
+    console.log('[paperRunner] Stopped gracefully');
+  } catch (error) {
+    console.error('[paperRunner] Fatal error in poll loop:', error);
+    throw error;
+  }
+}
+
+/**
+ * Main entry point
+ */
+async function run() {
+  let paperRunId = null;
+  
+  try {
+    // Initialize once at startup
+    const ctx = await initPaperRunAndAccounts();
+    paperRunId = ctx.paperRunId;
+    
+    // Run poll loop
+    await pollLoop(ctx);
+    
+    // Update run status on normal exit
+    if (paperRunId) {
+      await updatePaperRun(paperRunId, { status: shouldStop ? 'stopped' : 'finished' });
     }
   } catch (error) {
     console.error('[paperRunner] Fatal error:', error);
@@ -679,14 +787,12 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Handle SIGTERM
+// Handle SIGTERM gracefully
 process.on('SIGTERM', async () => {
-  console.log('[paperRunner] SIGTERM received, stopping...');
-  running = false;
-  if (paperRunId) {
-    await updatePaperRun(paperRunId, { status: 'stopped' });
-  }
-  process.exit(0);
+  console.log('[paperRunner] SIGTERM received, setting shouldStop flag...');
+  shouldStop = true;
+  // Don't exit immediately - let current batch finish
+  // The poll loop will check shouldStop and exit gracefully
 });
 
 // Run if called directly
