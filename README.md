@@ -438,8 +438,9 @@ Dit creëert de volgende tabellen:
 In Render, voeg de volgende environment variables toe:
 
 ```bash
-# Required
-PAPER_OPTIMIZER_RUN_ID=<uuid>  # Optimizer run ID om configs van te laden
+# Required (one of):
+PAPER_OPTIMIZER_RUN_ID=<uuid>  # Optimizer run ID om configs van te laden (voor nieuwe run)
+PAPER_RUN_ID=<uuid>  # Paper run ID om te resumen (alternatief voor PAPER_OPTIMIZER_RUN_ID)
 
 # Optional
 SYMBOL=BTC-PERPETUAL
@@ -447,6 +448,7 @@ PAPER_TIMEFRAME_MIN=1
 PAPER_BALANCE_START=1000
 PAPER_TOP_N=10  # Aantal top configs om te laden
 PAPER_POLL_SECONDS=15  # Poll interval in seconden
+PAPER_SAFE_LAG_MIN=1  # Aantal candles achter maxTs voor safe processing (default: 1, range: 0-10)
 
 # Kill rules
 PAPER_MIN_TRADES_BEFORE_KILL=50  # Min trades voordat kill rules actief worden

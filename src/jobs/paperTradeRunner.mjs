@@ -41,6 +41,25 @@ const PAPER_KILL_MIN_PNL_PCT = parseFloat(process.env.PAPER_KILL_MIN_PNL_PCT || 
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const PAPER_RUN_ID = process.env.PAPER_RUN_ID; // Optional: resume existing run
 
+// Parse PAPER_SAFE_LAG_MIN with validation
+function parseSafeLagMin() {
+  const envValue = process.env.PAPER_SAFE_LAG_MIN;
+  if (!envValue) {
+    return 1; // Default
+  }
+  
+  const parsed = parseInt(envValue, 10);
+  if (isNaN(parsed) || parsed < 0) {
+    console.warn(`[paperRunner] Invalid PAPER_SAFE_LAG_MIN="${envValue}", using default 1`);
+    return 1;
+  }
+  
+  // Clamp to 0-10 for safety
+  return Math.min(Math.max(parsed, 0), 10);
+}
+
+const PAPER_SAFE_LAG_MIN = parseSafeLagMin();
+
 let shouldStop = false;
 
 /**
@@ -442,25 +461,26 @@ function validateOptimizerRunId(optimizerRunId) {
  * Initialize paper run and accounts (runs once at startup)
  */
 async function initPaperRunAndAccounts() {
-  // Validate PAPER_OPTIMIZER_RUN_ID before any database calls
-  validateOptimizerRunId(PAPER_OPTIMIZER_RUN_ID);
+  // Guard: if neither PAPER_RUN_ID nor PAPER_OPTIMIZER_RUN_ID is set, throw error
+  if (!PAPER_RUN_ID && !PAPER_OPTIMIZER_RUN_ID) {
+    throw new Error('[paperRunner] Either PAPER_RUN_ID (to resume) or PAPER_OPTIMIZER_RUN_ID (to create new run) must be set');
+  }
   
-  console.log('[paperRunner] Starting paper trade runner:', {
-    SYMBOL,
-    PAPER_TIMEFRAME_MIN,
-    PAPER_BALANCE_START,
-    PAPER_TOP_N,
-    PAPER_OPTIMIZER_RUN_ID: `${PAPER_OPTIMIZER_RUN_ID.substring(0, 8)}...`,
-    PAPER_POLL_SECONDS,
-    PAPER_RUN_ID: PAPER_RUN_ID || '<new run>',
+  // Log safe lag config
+  const timeframeMs = PAPER_TIMEFRAME_MIN * 60_000;
+  const lagMs = PAPER_SAFE_LAG_MIN * timeframeMs;
+  console.log('[paperRunner] Safe lag config:', {
+    PAPER_SAFE_LAG_MIN,
+    timeframeMin: PAPER_TIMEFRAME_MIN,
+    lagMs,
   });
   
   let paperRunId;
   
-  // If PAPER_RUN_ID is provided, resume that run
+  // If PAPER_RUN_ID is provided, resume that run (ignore PAPER_OPTIMIZER_RUN_ID)
   if (PAPER_RUN_ID) {
     paperRunId = PAPER_RUN_ID;
-    console.log(`[paperRunner] Resuming existing paper run: ${paperRunId}`);
+    console.log(`[paperRunner] Resuming existing paper run: ${paperRunId} (PAPER_OPTIMIZER_RUN_ID ignored)`);
     
     // Verify run exists and get active accounts
     const accounts = await getActivePaperAccounts({ paperRunId });
@@ -472,7 +492,18 @@ async function initPaperRunAndAccounts() {
     return { paperRunId, symbol: SYMBOL };
   }
   
-  // Otherwise, create new run
+  // Otherwise, create new run (PAPER_OPTIMIZER_RUN_ID is required)
+  validateOptimizerRunId(PAPER_OPTIMIZER_RUN_ID);
+  
+  console.log('[paperRunner] Creating new paper run:', {
+    SYMBOL,
+    PAPER_TIMEFRAME_MIN,
+    PAPER_BALANCE_START,
+    PAPER_TOP_N,
+    PAPER_OPTIMIZER_RUN_ID: `${PAPER_OPTIMIZER_RUN_ID.substring(0, 8)}...`,
+    PAPER_POLL_SECONDS,
+  });
+  
   const paperRun = await createPaperRun({
     symbol: SYMBOL,
     timeframeMin: PAPER_TIMEFRAME_MIN,
@@ -543,10 +574,11 @@ async function pollLoop(ctx) {
           continue;
         }
         
-        // Compute safeEndMs with 1 candle buffer (exclude newest forming candle)
-        const safeEndMs = maxTsMs - (PAPER_TIMEFRAME_MIN * 60_000);
-        const safeEndTs = toIso(safeEndMs);
+        // Compute safeEndMs using PAPER_SAFE_LAG_MIN
         const timeframeMs = PAPER_TIMEFRAME_MIN * 60_000;
+        const safeLagMs = PAPER_SAFE_LAG_MIN * timeframeMs;
+        const safeEndMs = maxTsMs - safeLagMs;
+        const safeEndTs = toIso(safeEndMs);
         
         // Cap last_candle_ts on load (resume safety)
         for (const account of activeAccounts) {
@@ -596,6 +628,8 @@ async function pollLoop(ctx) {
           maxTsMs,
           safeEndTs,
           safeEndMs,
+          safeLagMin: PAPER_SAFE_LAG_MIN,
+          safeLagMs,
           minLastCandleTs,
           minLastCandleTsMs,
           activeAccounts: activeAccounts.length,
