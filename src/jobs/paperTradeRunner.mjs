@@ -546,8 +546,42 @@ async function pollLoop(ctx) {
         // Compute safeEndMs with 1 candle buffer (exclude newest forming candle)
         const safeEndMs = maxTsMs - (PAPER_TIMEFRAME_MIN * 60_000);
         const safeEndTs = toIso(safeEndMs);
+        const timeframeMs = PAPER_TIMEFRAME_MIN * 60_000;
         
-        // Find min(last_candle_ts) across accounts for logging (in ms)
+        // Cap last_candle_ts on load (resume safety)
+        for (const account of activeAccounts) {
+          if (!account.paper_configs || !account.paper_configs.is_active) {
+            continue;
+          }
+          const storedLastMs = toMs(account.last_candle_ts);
+          if (storedLastMs !== null && storedLastMs > safeEndMs) {
+            const effectiveLastMs = safeEndMs - timeframeMs; // Cap to safeEndMs - 1 candle
+            console.warn(`[paperRunner] Account ${account.id} has last_candle_ts (${account.last_candle_ts}) > safeEndMs (${safeEndTs}), capping to ${toIso(effectiveLastMs)}`);
+            // Optionally write corrective checkpoint once on startup
+            try {
+              await upsertAccountCheckpoint({
+                id: account.id,
+                run_id: paperRunId,
+                paper_config_id: account.paper_configs.id,
+                balance: account.balance,
+                equity: account.equity,
+                max_equity: account.max_equity,
+                max_drawdown_pct: account.max_drawdown_pct,
+                open_position: account.open_position,
+                trades_count: account.trades_count,
+                wins_count: account.wins_count,
+                losses_count: account.losses_count,
+                profit_factor: account.profit_factor,
+                last_candle_ts: toIso(effectiveLastMs),
+              });
+              account.last_candle_ts = toIso(effectiveLastMs);
+            } catch (error) {
+              console.error(`[paperRunner] Failed to cap checkpoint for account ${account.id}:`, error.message);
+            }
+          }
+        }
+        
+        // Find min(last_candle_ts) across accounts for logging (in ms, after capping)
         const lastCandleTsList = activeAccounts
           .map(acc => toMs(acc.last_candle_ts))
           .filter(ms => ms !== null);
@@ -563,6 +597,7 @@ async function pollLoop(ctx) {
           safeEndTs,
           safeEndMs,
           minLastCandleTs,
+          minLastCandleTsMs,
           activeAccounts: activeAccounts.length,
         });
         
@@ -582,38 +617,49 @@ async function pollLoop(ctx) {
           const config = account.paper_configs.config;
           const accountId = account.id;
           
+          // Get effective lastCandleMs (after potential capping)
+          const storedLastCandleTs = account.last_candle_ts;
+          const storedLastMs = toMs(storedLastCandleTs);
+          const effectiveLastMs = storedLastMs !== null && storedLastMs > safeEndMs
+            ? safeEndMs - timeframeMs // Already capped above, but ensure consistency
+            : storedLastMs;
+          
           // Compute startMs for this account (in milliseconds)
-          const lastCandleMs = toMs(account.last_candle_ts);
-          const startMs = lastCandleMs
-            ? lastCandleMs + (PAPER_TIMEFRAME_MIN * 60_000)
+          const startMs = effectiveLastMs !== null
+            ? effectiveLastMs + timeframeMs
             : safeEndMs - (24 * 60 * 60_000); // Default: 24h ago
           
           // If no last_candle_ts, log default start
-          if (!lastCandleMs) {
+          if (effectiveLastMs === null) {
             console.log(`[paperRunner] Account ${accountId} has no last_candle_ts, starting from ${toIso(startMs)}`);
           }
           
           // Skip if startMs >= safeEndMs (no new candles) - compare as numbers
           if (startMs >= safeEndMs) {
             console.log(`[paperRunner] No new candles for account ${accountId} (startMs >= safeEndMs):`, {
+              accountId,
+              storedLastCandleTs,
+              effectiveLastMs: effectiveLastMs !== null ? toIso(effectiveLastMs) : null,
               startTs: toIso(startMs),
               startMs,
               safeEndTs,
               safeEndMs,
             });
-            continue;
+            continue; // Do NOT update checkpoint - no candles processed
           }
           
           // Convert to ISO for DB queries
           const actualStartTs = toIso(startMs);
           
-          // Log per-account processing
+          // Log per-account processing start
           console.log(`[paperRunner] Processing account ${accountId}:`, {
+            accountId,
+            storedLastCandleTs,
+            effectiveLastMs: effectiveLastMs !== null ? toIso(effectiveLastMs) : null,
             startTs: actualStartTs,
             startMs,
             safeEndTs,
             safeEndMs,
-            lastCandleTs: account.last_candle_ts,
           });
           
           // Load candles with pagination to catch up fully
@@ -627,6 +673,7 @@ async function pollLoop(ctx) {
           
           if (candles.length === 0) {
             console.log(`[paperRunner] No candles in range for account ${accountId}: ${actualStartTs} to ${safeEndTs}`);
+            // Do NOT update checkpoint - no candles processed
             continue;
           }
           
@@ -639,8 +686,9 @@ async function pollLoop(ctx) {
             endTs: safeEndTs,
           });
           
-          // Process candles sequentially, updating last_candle_ts as we go
-          let lastProcessedTs = account.last_candle_ts;
+          // Process candles sequentially, tracking what was actually processed
+          let lastProcessedMs = effectiveLastMs; // Start from effective last (or null)
+          let candlesProcessed = 0; // Track how many candles were actually processed
           let accountTradesOpened = 0;
           let accountTradesClosed = 0;
           
@@ -657,76 +705,86 @@ async function pollLoop(ctx) {
               if (shouldStop) {
                 break;
               }
-            const candleObj = {
-              t: new Date(candle.ts).getTime(),
-              o: parseFloat(candle.open),
-              h: parseFloat(candle.high),
-              l: parseFloat(candle.low),
-              c: parseFloat(candle.close),
-              v: parseFloat(candle.volume || 0),
-              ts: candle.ts,
-            };
-            
-            // Update state cache at this candle
-            const stateCache = buildStateCache({
-              candles1m: allCandles.candles1m.filter(c => c.t <= candleObj.t),
-              candles5m: allCandles.candles5m.filter(c => c.t <= candleObj.t),
-              candles15m: allCandles.candles15m.filter(c => c.t <= candleObj.t),
-              candles60m: allCandles.candles60m.filter(c => c.t <= candleObj.t),
-              symbol: SYMBOL,
-            });
-            
-            try {
-              // Track if trade was opened/closed
-              const hadOpenPosition = !!account.open_position;
               
-              // Process candle
-              const updatedAccount = await processCandleForAccount(account, candleObj, config, stateCache);
+              const candleObj = {
+                t: new Date(candle.ts).getTime(),
+                o: parseFloat(candle.open),
+                h: parseFloat(candle.high),
+                l: parseFloat(candle.low),
+                c: parseFloat(candle.close),
+                v: parseFloat(candle.volume || 0),
+                ts: candle.ts,
+              };
               
-              // Track trades
-              if (!hadOpenPosition && updatedAccount.open_position) {
-                accountTradesOpened++;
-              }
-              if (hadOpenPosition && !updatedAccount.open_position) {
-                accountTradesClosed++;
+              // Cap candle timestamp to safeEndMs
+              const candleMs = roundDownToMinuteMs(candleObj.t);
+              if (candleMs > safeEndMs) {
+                // Skip candles beyond safeEndMs
+                continue;
               }
               
-              // Update account reference
-              Object.assign(account, updatedAccount);
+              // Update state cache at this candle
+              const stateCache = buildStateCache({
+                candles1m: allCandles.candles1m.filter(c => c.t <= candleObj.t),
+                candles5m: allCandles.candles5m.filter(c => c.t <= candleObj.t),
+                candles15m: allCandles.candles15m.filter(c => c.t <= candleObj.t),
+                candles60m: allCandles.candles60m.filter(c => c.t <= candleObj.t),
+                symbol: SYMBOL,
+              });
               
-              // Update last_candle_ts only after successful processing (idempotency)
-              lastProcessedTs = candle.ts;
-              
-              // Check kill rules
-              if (updatedAccount.trades_count >= PAPER_MIN_TRADES_BEFORE_KILL) {
-                const wasKilled = await checkKillRules(updatedAccount, account.paper_configs);
-                if (wasKilled) {
-                  // Account was killed, stop processing for this account
-                  break;
+              try {
+                // Track if trade was opened/closed
+                const hadOpenPosition = !!account.open_position;
+                
+                // Process candle
+                const updatedAccount = await processCandleForAccount(account, candleObj, config, stateCache);
+                
+                // Track trades
+                if (!hadOpenPosition && updatedAccount.open_position) {
+                  accountTradesOpened++;
                 }
+                if (hadOpenPosition && !updatedAccount.open_position) {
+                  accountTradesClosed++;
+                }
+                
+                // Update account reference
+                Object.assign(account, updatedAccount);
+                
+                // Update lastProcessedMs only after successful processing (capped to safeEndMs)
+                lastProcessedMs = Math.min(candleMs, safeEndMs);
+                candlesProcessed++;
+                
+                // Check kill rules
+                if (updatedAccount.trades_count >= PAPER_MIN_TRADES_BEFORE_KILL) {
+                  const wasKilled = await checkKillRules(updatedAccount, account.paper_configs);
+                  if (wasKilled) {
+                    // Account was killed, stop processing for this account
+                    break;
+                  }
+                }
+                
+                // Snapshot equity (every 10 candles to reduce DB load)
+                if (candlesProcessed % 10 === 0) {
+                  await upsertEquitySnapshot({
+                    run_id: paperRunId,
+                    paper_config_id: account.paper_configs.id,
+                    ts: candle.ts,
+                    equity: updatedAccount.equity,
+                    balance: updatedAccount.balance,
+                    dd_pct: updatedAccount.max_drawdown_pct,
+                  });
+                }
+              } catch (error) {
+                // If processing fails, don't advance lastProcessedMs (idempotency)
+                console.error(`[paperRunner] Error processing candle ${candle.ts} for account ${accountId}:`, error.message);
+                // Continue to next candle, but don't update lastProcessedMs
+                continue;
               }
-              
-              // Snapshot equity (every 10 candles to reduce DB load)
-              if (candles.indexOf(candle) % 10 === 0) {
-                await upsertEquitySnapshot({
-                  run_id: paperRunId,
-                  paper_config_id: account.paper_configs.id,
-                  ts: candle.ts,
-                  equity: updatedAccount.equity,
-                  balance: updatedAccount.balance,
-                  dd_pct: updatedAccount.max_drawdown_pct,
-                });
-              }
-            } catch (error) {
-              // If processing fails, don't advance last_candle_ts (idempotency)
-              console.error(`[paperRunner] Error processing candle ${candle.ts} for account ${accountId}:`, error.message);
-              // Continue to next candle, but don't update lastProcessedTs
-              continue;
-            }
             }
             
-            // Update checkpoint after each batch (idempotency)
-            if (lastProcessedTs && lastProcessedTs !== account.last_candle_ts) {
+            // Update checkpoint after each batch ONLY if candles were processed
+            if (candlesProcessed > 0 && lastProcessedMs !== null && lastProcessedMs !== effectiveLastMs) {
+              const lastProcessedTs = toIso(lastProcessedMs);
               try {
                 await upsertAccountCheckpoint({
                   id: accountId,
@@ -754,10 +812,17 @@ async function pollLoop(ctx) {
             }
           }
           
-          // Log per-account summary
+          // Log per-account summary with explicit counts
           console.log(`[paperRunner] Account ${accountId} processed:`, {
-            candlesProcessed: candles.length,
-            lastProcessedTs,
+            accountId,
+            storedLastCandleTs,
+            effectiveLastMs: effectiveLastMs !== null ? toIso(effectiveLastMs) : null,
+            startTs: actualStartTs,
+            safeEndTs,
+            candlesLoaded: candles.length,
+            candlesProcessed,
+            lastProcessedTs: candlesProcessed > 0 ? toIso(lastProcessedMs) : null,
+            lastProcessedMs: candlesProcessed > 0 ? lastProcessedMs : null,
             tradesOpened: accountTradesOpened,
             tradesClosed: accountTradesClosed,
           });
