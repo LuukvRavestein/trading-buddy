@@ -22,7 +22,11 @@ export function PnlChart({ runId }: PnlChartProps) {
     async function loadData() {
       try {
         setLoading(true)
-        const dailyData = await getDailyPnL(runId)
+        // TypeScript guard: runId is checked above
+        const id = runId
+        if (!id) return
+        
+        const dailyData = await getDailyPnL(id)
         setData(dailyData)
       } catch (error) {
         console.error('Failed to load daily PnL:', error)

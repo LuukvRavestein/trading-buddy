@@ -33,8 +33,12 @@ export default function JournalPage() {
     try {
       setLoading(true)
       setError(null)
+      // TypeScript guard: selectedRunId is checked above
+      const runId = selectedRunId
+      if (!runId) return
+      
       const result = await getPaperJournal({
-        runId: selectedRunId,
+        runId: runId,
         configRank: configRank ? parseInt(configRank, 10) : undefined,
         limit: pageSize,
         offset: (page - 1) * pageSize,

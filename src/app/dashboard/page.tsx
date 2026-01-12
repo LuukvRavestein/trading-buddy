@@ -27,9 +27,13 @@ export default function DashboardPage() {
       try {
         setLoading(true)
         setError(null)
+        // TypeScript guard: selectedRunId is checked above, but we need to assert it's not null
+        const runId = selectedRunId
+        if (!runId) return
+        
         const [overview, strategyData] = await Promise.all([
-          getRunOverview(selectedRunId),
-          getStrategyPerformance(selectedRunId),
+          getRunOverview(runId),
+          getStrategyPerformance(runId),
         ])
         setRunOverview(overview)
         setStrategies(strategyData)
