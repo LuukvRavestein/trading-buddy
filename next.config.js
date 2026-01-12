@@ -7,4 +7,5 @@ const nextConfig = {
   },
 }
 
+// Use CommonJS export for Next.js compatibility (even with "type": "module" in package.json)
 module.exports = nextConfig
