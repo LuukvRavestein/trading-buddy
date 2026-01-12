@@ -542,6 +542,62 @@ De runner is idempotent:
 - Unique constraints voorkomen duplicate trades/snapshots
 - Bij herstart hervat de runner vanaf het laatste checkpoint
 
+## 📊 Dashboard
+
+A Next.js web dashboard for viewing paper trading results, strategy performance, and trade journal.
+
+### Setup
+
+1. **Install dependencies:**
+   ```bash
+   npm install
+   ```
+
+2. **Set environment variables:**
+   ```bash
+   NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+   ```
+
+3. **Run development server:**
+   ```bash
+   npm run dev:web
+   ```
+
+4. **Build for production:**
+   ```bash
+   npm run build:web
+   ```
+
+5. **Start production server:**
+   ```bash
+   npm run start:web
+   ```
+
+### Features
+
+- **Dashboard** (`/dashboard`): Overview with KPI cards, daily PnL chart, and strategy performance table
+- **Run Details** (`/runs/[runId]`): Detailed view of a specific paper trading run
+- **Trading Journal** (`/journal`): Filterable table of all trades with pagination
+
+### Vercel Deployment
+
+1. Connect your GitHub repository to Vercel
+2. Add environment variables:
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+3. Deploy - Vercel will automatically detect Next.js and build
+
+### Database Views
+
+The dashboard uses SQL views from `supabase/migrations/010_dashboard_views.sql`:
+- `v_run_overview`: High-level run statistics
+- `v_strategy_performance`: Performance metrics per strategy
+- `v_paper_journal`: Detailed trade journal
+- `v_daily_pnl`: Daily PnL aggregation
+
+Make sure to run the migration in Supabase SQL Editor before using the dashboard.
+
 ## 📥 Candle Ingest
 
 De bot heeft een robuuste candle ingest oplossing om historische candles van Deribit naar Supabase te halen. Dit is handig voor:
