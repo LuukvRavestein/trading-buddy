@@ -1,5 +1,8 @@
 'use client'
 
+// Force dynamic rendering - don't prerender this page
+export const dynamic = 'force-dynamic'
+
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { RunSelector } from '@/components/RunSelector'
