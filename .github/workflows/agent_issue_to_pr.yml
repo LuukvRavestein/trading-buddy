@@ -1,0 +1,72 @@
+name: Agent Issue to PR
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  agent:
+    if: github.event.label.name == 'agent'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: read
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_AGENT_TOKEN }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Run agent
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          BASE_BRANCH: main
+        run: |
+          node src/agent/runAgent.mjs
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GH_AGENT_TOKEN }}
+        run: |
+          # GitHub CLI is pre-installed on GitHub Actions runners
+          BRANCH_NAME=$(node -e "
+            const title = '${{ github.event.issue.title }}';
+            const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').substring(0, 50);
+            console.log('agent/issue-${{ github.event.issue.number }}-' + (slug || 'untitled'));
+          ")
+          
+          gh pr create \
+            --title "Agent: Issue #${{ github.event.issue.number }} - ${{ github.event.issue.title }}" \
+            --body "This PR was automatically created by the GitHub Issue → PR automation agent.
+
+**Issue**: #${{ github.event.issue.number }}
+**Title**: ${{ github.event.issue.title }}
+
+## Changes
+
+- Created branch: \`$BRANCH_NAME\`
+- Added artifact: \`agent_artifacts/issue-${{ github.event.issue.number }}-plan.md\`
+- Updated \`ROADMAP.md\` with issue reference
+
+## Next Steps
+
+- Review the issue requirements
+- Implement the necessary changes
+- Update the plan in the artifact file as needed
+
+---
+*This PR was automatically created by the GitHub Issue → PR automation agent.*" \
+            --base main \
+            --head "$BRANCH_NAME" \
+            || echo "PR may already exist or failed to create"

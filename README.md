@@ -794,6 +794,49 @@ Het project is opgebouwd in fases:
 - Verify `DERIBIT_ENV` is correct (`test` of `live`)
 - Check Deribit API status
 
+## 🤖 GitHub Issue → PR Automation
+
+The repository includes an automated agent that creates PRs from GitHub issues labeled with `agent`.
+
+### How It Works
+
+1. **Create an issue** with the label `agent`
+2. The GitHub Actions workflow automatically:
+   - Creates a branch: `agent/issue-<nr>-<slug>`
+   - Writes an artifact file: `agent_artifacts/issue-<nr>-plan.md`
+   - Makes a minimal safe code change (appends to `ROADMAP.md`)
+   - Commits and pushes the branch
+   - Creates a PR automatically
+
+### Setup
+
+1. **Add GitHub Secret**:
+   - Go to your repository → Settings → Secrets and variables → Actions
+   - Add a new secret: `GH_AGENT_TOKEN`
+   - Value: A GitHub Personal Access Token (PAT) with permissions:
+     - `repo` (full control of private repositories)
+     - `workflow` (update GitHub Action workflows)
+
+2. **Create an Issue**:
+   - Create a new issue in GitHub
+   - Add the label `agent`
+   - The workflow will trigger automatically
+
+### What to Expect
+
+- A new branch will be created: `agent/issue-<nr>-<slug>`
+- An artifact file will be created: `agent_artifacts/issue-<nr>-plan.md`
+- `ROADMAP.md` will be updated with a reference to the issue
+- A PR will be automatically created from the branch to `main`
+
+### Files
+
+- `src/agent/runAgent.mjs` - The agent script
+- `.github/workflows/agent_issue_to_pr.yml` - GitHub Actions workflow
+- `agent_artifacts/` - Directory for agent-generated artifacts
+
+For more details, see [docs/AGENT.md](./docs/AGENT.md) (if it exists).
+
 ## 📄 License
 
 MIT
