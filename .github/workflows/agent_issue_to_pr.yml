@@ -46,27 +46,32 @@ jobs:
             console.log('agent/issue-${{ github.event.issue.number }}-' + (slug || 'untitled'));
           ")
           
+          PR_BODY=$(cat <<EOF
+          This PR was automatically created by the GitHub Issue → PR automation agent.
+          
+          **Issue**: #${{ github.event.issue.number }}
+          **Title**: ${{ github.event.issue.title }}
+          
+          ## Changes
+          
+          - Created branch: \`$BRANCH_NAME\`
+          - Added artifact: \`agent_artifacts/issue-${{ github.event.issue.number }}-plan.md\`
+          - Updated \`ROADMAP.md\` with issue reference
+          
+          ## Next Steps
+          
+          - Review the issue requirements
+          - Implement the necessary changes
+          - Update the plan in the artifact file as needed
+          
+          ---
+          *This PR was automatically created by the GitHub Issue → PR automation agent.*
+          EOF
+          )
+          
           gh pr create \
             --title "Agent: Issue #${{ github.event.issue.number }} - ${{ github.event.issue.title }}" \
-            --body "This PR was automatically created by the GitHub Issue → PR automation agent.
-
-**Issue**: #${{ github.event.issue.number }}
-**Title**: ${{ github.event.issue.title }}
-
-## Changes
-
-- Created branch: \`$BRANCH_NAME\`
-- Added artifact: \`agent_artifacts/issue-${{ github.event.issue.number }}-plan.md\`
-- Updated \`ROADMAP.md\` with issue reference
-
-## Next Steps
-
-- Review the issue requirements
-- Implement the necessary changes
-- Update the plan in the artifact file as needed
-
----
-*This PR was automatically created by the GitHub Issue → PR automation agent.*" \
+            --body "$PR_BODY" \
             --base main \
             --head "$BRANCH_NAME" \
             || echo "PR may already exist or failed to create"
