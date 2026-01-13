@@ -28,3 +28,9 @@
 ## Agent
 
 This section is automatically updated by the GitHub Issue → PR automation agent.
+
+## Agent
+
+This section is automatically updated by the GitHub Issue → PR automation agent.
+
+- Issue #5: Test agent: maakt PR (branch: `agent/issue-5-test-agent-maakt-pr`)
