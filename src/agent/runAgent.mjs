@@ -48,22 +48,61 @@ console.log(`[agent] Title: ${ISSUE_TITLE}`);
 console.log(`[agent] Branch: ${branchName}`);
 
 try {
+  // 0. Configure git (required for commits in GitHub Actions)
+  console.log(`[agent] Configuring git...`);
+  execSync('git config user.name "GitHub Actions Agent"', { stdio: 'inherit' });
+  execSync('git config user.email "actions@github.com"', { stdio: 'inherit' });
+
   // 1. Ensure we're on base branch and up to date
   console.log(`[agent] Checking out ${BASE_BRANCH}...`);
-  execSync(`git checkout ${BASE_BRANCH}`, { stdio: 'inherit' });
-  execSync(`git pull origin ${BASE_BRANCH}`, { stdio: 'inherit' });
+  try {
+    execSync(`git checkout ${BASE_BRANCH}`, { stdio: 'inherit' });
+  } catch (e) {
+    console.log(`[agent] Already on ${BASE_BRANCH}`);
+  }
+  
+  try {
+    execSync(`git pull origin ${BASE_BRANCH}`, { stdio: 'inherit' });
+  } catch (e) {
+    console.log(`[agent] Pull failed, continuing anyway`);
+  }
 
-  // 2. Create and checkout new branch
-  console.log(`[agent] Creating branch ${branchName}...`);
-  execSync(`git checkout -b ${branchName}`, { stdio: 'inherit' });
+  // 2. Check if branch already exists
+  let branchExists = false;
+  try {
+    execSync(`git show-ref --verify --quiet refs/heads/${branchName}`, { stdio: 'pipe' });
+    branchExists = true;
+    console.log(`[agent] Warning: Branch ${branchName} already exists locally`);
+  } catch (e) {
+    // Branch doesn't exist locally, check remote
+    try {
+      const remoteCheck = execSync(`git ls-remote --heads origin ${branchName}`, { encoding: 'utf-8' });
+      if (remoteCheck.trim()) {
+        branchExists = true;
+        console.error(`[agent] Error: Branch ${branchName} already exists on remote`);
+        process.exit(1);
+      }
+    } catch (e2) {
+      // Branch doesn't exist, we can create it
+    }
+  }
 
-  // 3. Create artifact directory if it doesn't exist
+  // 3. Create and checkout new branch
+  if (!branchExists) {
+    console.log(`[agent] Creating branch ${branchName}...`);
+    execSync(`git checkout -b ${branchName}`, { stdio: 'inherit' });
+  } else {
+    console.log(`[agent] Checking out existing branch ${branchName}...`);
+    execSync(`git checkout ${branchName}`, { stdio: 'inherit' });
+  }
+
+  // 4. Create artifact directory if it doesn't exist
   const artifactDir = 'agent_artifacts';
   if (!existsSync(artifactDir)) {
     execSync(`mkdir -p ${artifactDir}`, { stdio: 'inherit' });
   }
 
-  // 4. Write artifact file
+  // 5. Write artifact file
   const artifactPath = join(artifactDir, `issue-${ISSUE_NUMBER}-plan.md`);
   const artifactContent = `# Issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}
 
@@ -98,7 +137,7 @@ The agent will:
   console.log(`[agent] Writing artifact: ${artifactPath}`);
   writeFileSync(artifactPath, artifactContent, 'utf-8');
 
-  // 5. Make minimal safe code change: append to ROADMAP.md
+  // 6. Make minimal safe code change: append to ROADMAP.md
   const roadmapPath = 'ROADMAP.md';
   if (existsSync(roadmapPath)) {
     const roadmapContent = readFileSync(roadmapPath, 'utf-8');
@@ -116,12 +155,28 @@ The agent will:
     console.log(`[agent] Warning: ${roadmapPath} not found, skipping update`);
   }
 
-  // 6. Stage changes
+  // 7. Stage changes
   console.log(`[agent] Staging changes...`);
-  execSync('git add agent_artifacts/ ROADMAP.md', { stdio: 'inherit' });
+  try {
+    execSync('git add agent_artifacts/ ROADMAP.md', { stdio: 'inherit' });
+  } catch (e) {
+    console.log(`[agent] Warning: git add failed, trying individual files...`);
+    execSync('git add agent_artifacts/', { stdio: 'inherit' });
+    if (existsSync('ROADMAP.md')) {
+      execSync('git add ROADMAP.md', { stdio: 'inherit' });
+    }
+  }
 
-  // 7. Commit
-  const commitMessage = `agent: create branch for issue #${ISSUE_NUMBER}
+  // Check if there are changes to commit
+  try {
+    const status = execSync('git status --porcelain', { encoding: 'utf-8' });
+    if (!status.trim()) {
+      console.log(`[agent] No changes to commit, skipping commit`);
+    } else {
+      console.log(`[agent] Changes to commit:\n${status}`);
+      
+      // 8. Commit
+      const commitMessage = `agent: create branch for issue #${ISSUE_NUMBER}
 
 - Create artifact: agent_artifacts/issue-${ISSUE_NUMBER}-plan.md
 - Update ROADMAP.md with issue reference
@@ -129,17 +184,29 @@ The agent will:
 Issue: #${ISSUE_NUMBER}
 Title: ${ISSUE_TITLE}
 `;
-  console.log(`[agent] Committing changes...`);
-  execSync(`git commit -m "${commitMessage.replace(/"/g, '\\"')}"`, { stdio: 'inherit' });
+      console.log(`[agent] Committing changes...`);
+      execSync(`git commit -m "${commitMessage.replace(/"/g, '\\"')}"`, { stdio: 'inherit' });
 
-  // 8. Push branch
-  console.log(`[agent] Pushing branch ${branchName}...`);
-  execSync(`git push -u origin ${branchName}`, { stdio: 'inherit' });
+      // 9. Push branch
+      console.log(`[agent] Pushing branch ${branchName}...`);
+      execSync(`git push -u origin ${branchName}`, { stdio: 'inherit' });
+    }
+  } catch (e) {
+    console.error(`[agent] Error checking git status: ${e.message}`);
+    throw e;
+  }
 
   console.log(`[agent] ✅ Success! Branch ${branchName} created and pushed.`);
   console.log(`[agent] Next: Create a PR from ${branchName} to ${BASE_BRANCH}`);
 
 } catch (error) {
   console.error(`[agent] ❌ Error: ${error.message}`);
+  if (error.stdout) {
+    console.error(`[agent] stdout: ${error.stdout}`);
+  }
+  if (error.stderr) {
+    console.error(`[agent] stderr: ${error.stderr}`);
+  }
+  console.error(`[agent] Stack: ${error.stack}`);
   process.exit(1);
 }
