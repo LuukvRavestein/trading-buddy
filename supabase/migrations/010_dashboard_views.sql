@@ -6,6 +6,7 @@
 -- - v_run_overview: High-level overview per paper run
 -- - v_daily_pnl: Daily PnL aggregation
 -- - v_trade_reason_stats: Aggregated win/loss reasons from paper trades
+-- - v_weekly_pnl: Weekly PnL aggregation
 --
 -- Run this in Supabase SQL Editor:
 -- 1. Go to Supabase Dashboard → SQL Editor
@@ -243,6 +244,30 @@ GROUP BY
   b.entry_reason,
   b.trigger_type,
   b.exit_reason;
+
+-- ============================================================================
+-- F) V_WEEKLY_PNL
+-- ============================================================================
+-- Weekly PnL aggregation per run
+CREATE OR REPLACE VIEW public.v_weekly_pnl AS
+SELECT
+  DATE_TRUNC('week', COALESCE(t.closed_ts, t.opened_ts))::DATE AS week_start,
+  t.run_id,
+  r.symbol,
+  r.timeframe_min,
+  SUM(t.pnl_abs) AS pnl_total,
+  COUNT(*) AS trades,
+  COUNT(*) FILTER (WHERE t.result = 'win') AS wins,
+  COUNT(*) FILTER (WHERE t.result = 'loss') AS losses,
+  CASE
+    WHEN COUNT(*) > 0
+    THEN ROUND((COUNT(*) FILTER (WHERE t.result = 'win')::NUMERIC / COUNT(*)::NUMERIC) * 100, 2)
+    ELSE 0
+  END AS winrate
+FROM public.paper_trades t
+INNER JOIN public.paper_runs r ON t.run_id = r.id
+WHERE t.closed_ts IS NOT NULL
+GROUP BY DATE_TRUNC('week', COALESCE(t.closed_ts, t.opened_ts)), t.run_id, r.symbol, r.timeframe_min;
 
 -- ============================================================================
 -- INDEX RECOMMENDATIONS (as comments)

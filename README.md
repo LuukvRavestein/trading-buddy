@@ -606,6 +606,7 @@ The dashboard uses SQL views from `supabase/migrations/010_dashboard_views.sql`:
 - `v_paper_journal`: Detailed trade journal
 - `v_daily_pnl`: Daily PnL aggregation
 - `v_trade_reason_stats`: Aggregated entry/exit reasons + outcomes
+- `v_weekly_pnl`: Weekly PnL aggregation
 
 Make sure to run the migration in Supabase SQL Editor before using the dashboard.
 
@@ -820,6 +821,7 @@ REPORT_RUN_ID=optional-run-id
 REPORT_LOOKBACK_DAYS=7
 REPORT_MIN_TRADES=10
 REPORT_TOP_N=5
+REPORT_WEEKS=4
 
 # Auto-tune (default: false)
 REPORT_ENABLE_AUTO_TUNE=false

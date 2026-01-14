@@ -12,6 +12,7 @@
  *   REPORT_LOOKBACK_DAYS - Days of closed trades to include (default: 7)
  *   REPORT_MIN_TRADES - Minimum trades per reason to include (default: 10)
  *   REPORT_TOP_N - Top reasons to include in report (default: 5)
+ *   REPORT_WEEKS - Number of weekly buckets (default: 4)
  *
  * Auto-tune (optional):
  *   REPORT_ENABLE_AUTO_TUNE - true|false (default: false)
@@ -29,6 +30,7 @@ const REPORT_RUN_ID = process.env.REPORT_RUN_ID || null
 const REPORT_LOOKBACK_DAYS = parseInt(process.env.REPORT_LOOKBACK_DAYS || '7', 10)
 const REPORT_MIN_TRADES = parseInt(process.env.REPORT_MIN_TRADES || '10', 10)
 const REPORT_TOP_N = parseInt(process.env.REPORT_TOP_N || '5', 10)
+const REPORT_WEEKS = parseInt(process.env.REPORT_WEEKS || '4', 10)
 
 const REPORT_ENABLE_AUTO_TUNE = ['true', '1', 'yes'].includes((process.env.REPORT_ENABLE_AUTO_TUNE || '').toLowerCase())
 const REPORT_AUTOTUNE_MIN_TRADES = parseInt(process.env.REPORT_AUTOTUNE_MIN_TRADES || '30', 10)
@@ -76,6 +78,25 @@ async function fetchReasonStats(client, runId, minTrades, sinceIso) {
   if (!response.ok) {
     const errorText = await response.text()
     throw new Error(`Failed to fetch reason stats: ${response.status} ${errorText}`)
+  }
+
+  return response.json()
+}
+
+async function fetchWeeklyPnL(client, runId, weeks) {
+  const url = `${client.url}/rest/v1/v_weekly_pnl?run_id=eq.${runId}&order=week_start.desc&limit=${weeks}`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'apikey': client.key,
+      'Authorization': `Bearer ${client.key}`,
+      'Content-Type': 'application/json',
+    },
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`Failed to fetch weekly pnl: ${response.status} ${errorText}`)
   }
 
   return response.json()
@@ -188,6 +209,12 @@ async function main() {
 
   const sinceIso = daysAgoIso(REPORT_LOOKBACK_DAYS)
   const reasonStats = await fetchReasonStats(client, runId, REPORT_MIN_TRADES, sinceIso)
+  let weeklySummary = []
+  try {
+    weeklySummary = await fetchWeeklyPnL(client, runId, REPORT_WEEKS)
+  } catch (error) {
+    console.warn('[learningReport] Weekly summary unavailable (view not run yet):', error.message)
+  }
   const summary = buildSummary(reasonStats)
   const autoTuneResult = await autoTuneIfEnabled(client, runId)
 
@@ -200,6 +227,7 @@ async function main() {
       min_trades: REPORT_MIN_TRADES,
       top_n: REPORT_TOP_N,
       summary,
+      weekly_summary: weeklySummary,
       auto_tune: {
         enabled: REPORT_ENABLE_AUTO_TUNE,
         tuned: autoTuneResult.tuned,
