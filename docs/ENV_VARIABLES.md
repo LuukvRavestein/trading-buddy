@@ -170,6 +170,8 @@ PAPER_OPTIMIZER_RUN_ID=uuid-from-optimizer_runs
 PAPER_BALANCE_START=1000
 PAPER_POLL_SECONDS=15
 PAPER_SAFE_LAG_MIN=1
+PAPER_RUN_MODE=continuous
+PAPER_REFRESH_CONFIGS=false
 ```
 
 > `PAPER_TIMEFRAME_MIN` wordt genegeerd en altijd 1m gebruikt zodat 1m/5m/15m synchroon lopen.

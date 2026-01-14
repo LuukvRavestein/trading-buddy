@@ -65,6 +65,47 @@ export async function updatePaperRun(runId, updateData) {
 }
 
 /**
+ * Get latest paper run for a symbol
+ *
+ * @param {object} options
+ * @param {string} options.symbol - Symbol (e.g., 'BTC-PERPETUAL')
+ * @param {number} options.timeframeMin - Optional timeframe filter
+ * @param {string[]} options.statuses - Optional status filter
+ * @returns {Promise<object|null>} Latest run or null
+ */
+export async function getLatestPaperRunBySymbol({ symbol, timeframeMin = null, statuses = null }) {
+  if (!isSupabaseConfigured()) {
+    throw new Error('Supabase not configured');
+  }
+
+  const client = getSupabaseClient();
+  const statusFilter = Array.isArray(statuses) && statuses.length > 0
+    ? `&status=in.(${statuses.join(',')})`
+    : '';
+  const timeframeFilter = typeof timeframeMin === 'number'
+    ? `&timeframe_min=eq.${timeframeMin}`
+    : '';
+  const url = `${client.url}/rest/v1/paper_runs?symbol=eq.${symbol}${timeframeFilter}${statusFilter}&order=started_at.desc&limit=1`;
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'apikey': client.key,
+      'Authorization': `Bearer ${client.key}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to fetch latest paper run: ${response.status} ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data?.[0] || null;
+}
+
+/**
  * Upsert paper configs from optimizer run
  * 
  * @param {object} options

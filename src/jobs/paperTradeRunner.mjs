@@ -21,7 +21,7 @@
  *   DISCORD_WEBHOOK_URL - Optional Discord webhook URL
  */
 
-import { createPaperRun, updatePaperRun, upsertPaperConfigsFromOptimizerRun, seedPaperAccountsForRun, getActivePaperAccounts, upsertAccountCheckpoint, insertTradeOpen, updateTradeClose, upsertEquitySnapshot, killConfig, logEvent } from '../db/paperTradingRepo.mjs';
+import { createPaperRun, updatePaperRun, getLatestPaperRunBySymbol, upsertPaperConfigsFromOptimizerRun, seedPaperAccountsForRun, getActivePaperAccounts, upsertAccountCheckpoint, insertTradeOpen, updateTradeClose, upsertEquitySnapshot, killConfig, logEvent } from '../db/paperTradingRepo.mjs';
 import { openPosition, checkExitOnCandle, closePosition, updateEquityAndDD, calculateMarkToMarketEquity, calculateProfitFactor } from '../trading/paperEngine.mjs';
 import { buildStateCache, evaluateStrategy, loadCandlesForTimeframes } from '../trading/strategyRunner.mjs';
 import { getCandlesBetween, getMaxCandleTs } from '../db/supabaseClient.js';
@@ -41,6 +41,12 @@ const PAPER_KILL_MIN_PF = parseFloat(process.env.PAPER_KILL_MIN_PF || '0.8', 10)
 const PAPER_KILL_MIN_PNL_PCT = parseFloat(process.env.PAPER_KILL_MIN_PNL_PCT || '-2', 10);
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const PAPER_RUN_ID = process.env.PAPER_RUN_ID; // Optional: resume existing run
+const PAPER_RUN_MODE = process.env.PAPER_RUN_MODE || 'batch'; // batch|continuous
+const PAPER_RUN_RESUME_STATUSES = (process.env.PAPER_RUN_RESUME_STATUSES || 'running,stopped')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+const PAPER_REFRESH_CONFIGS = ['true', '1', 'yes'].includes((process.env.PAPER_REFRESH_CONFIGS || '').toLowerCase());
 
 const REQUIRED_TIMEFRAMES = [1, 5, 15];
 
@@ -496,11 +502,6 @@ function validateOptimizerRunId(optimizerRunId) {
  * Initialize paper run and accounts (runs once at startup)
  */
 async function initPaperRunAndAccounts() {
-  // Guard: if neither PAPER_RUN_ID nor PAPER_OPTIMIZER_RUN_ID is set, throw error
-  if (!PAPER_RUN_ID && !PAPER_OPTIMIZER_RUN_ID) {
-    throw new Error('[paperRunner] Either PAPER_RUN_ID (to resume) or PAPER_OPTIMIZER_RUN_ID (to create new run) must be set');
-  }
-  
   // Log safe lag config
   const timeframeMs = PAPER_TIMEFRAME_MIN * 60_000;
   const lagMs = PAPER_SAFE_LAG_MIN * timeframeMs;
@@ -526,6 +527,60 @@ async function initPaperRunAndAccounts() {
     console.log(`[paperRunner] Found ${accounts.length} active accounts for run ${paperRunId}`);
     return { paperRunId, symbol: SYMBOL };
   }
+
+  // Continuous mode: reuse latest run for this symbol if available
+  if (PAPER_RUN_MODE === 'continuous') {
+    const latestRun = await getLatestPaperRunBySymbol({
+      symbol: SYMBOL,
+      timeframeMin: PAPER_TIMEFRAME_MIN,
+      statuses: PAPER_RUN_RESUME_STATUSES,
+    });
+
+    if (latestRun) {
+      paperRunId = latestRun.id;
+      console.log(`[paperRunner] Continuous mode: resuming latest run ${paperRunId} (status=${latestRun.status})`);
+      if (latestRun.status !== 'running') {
+        await updatePaperRun(paperRunId, {
+          status: 'running',
+          note: `Resumed by continuous runner at ${new Date().toISOString()}`,
+        });
+      }
+
+      if (PAPER_OPTIMIZER_RUN_ID && PAPER_REFRESH_CONFIGS) {
+        console.log('[paperRunner] Refreshing configs from optimizer in continuous mode');
+        await upsertPaperConfigsFromOptimizerRun({
+          paperRunId,
+          optimizerRunId: PAPER_OPTIMIZER_RUN_ID,
+          topN: PAPER_TOP_N,
+        });
+        await seedPaperAccountsForRun({ runId: paperRunId, balanceStart: PAPER_BALANCE_START });
+      }
+
+      const accounts = await getActivePaperAccounts({ paperRunId });
+      if (accounts.length === 0 && PAPER_OPTIMIZER_RUN_ID) {
+        console.log('[paperRunner] No active accounts found; seeding from optimizer configs');
+        await upsertPaperConfigsFromOptimizerRun({
+          paperRunId,
+          optimizerRunId: PAPER_OPTIMIZER_RUN_ID,
+          topN: PAPER_TOP_N,
+        });
+        await seedPaperAccountsForRun({ runId: paperRunId, balanceStart: PAPER_BALANCE_START });
+      }
+
+      const activeAccounts = await getActivePaperAccounts({ paperRunId });
+      if (activeAccounts.length === 0) {
+        throw new Error(`No active accounts found for runId=${paperRunId}`);
+      }
+
+      console.log(`[paperRunner] Found ${activeAccounts.length} active accounts for run ${paperRunId}`);
+      return { paperRunId, symbol: SYMBOL };
+    }
+  }
+  
+  // Guard: if neither PAPER_RUN_ID nor PAPER_OPTIMIZER_RUN_ID is set, throw error
+  if (!PAPER_OPTIMIZER_RUN_ID) {
+    throw new Error('[paperRunner] PAPER_OPTIMIZER_RUN_ID is required to create a new run');
+  }
   
   // Otherwise, create new run (PAPER_OPTIMIZER_RUN_ID is required)
   validateOptimizerRunId(PAPER_OPTIMIZER_RUN_ID);
@@ -542,7 +597,9 @@ async function initPaperRunAndAccounts() {
   const paperRun = await createPaperRun({
     symbol: SYMBOL,
     timeframeMin: PAPER_TIMEFRAME_MIN,
-    note: `Paper trading run for optimizer ${PAPER_OPTIMIZER_RUN_ID}`,
+    note: PAPER_RUN_MODE === 'continuous'
+      ? `Continuous paper trading run for optimizer ${PAPER_OPTIMIZER_RUN_ID}`
+      : `Paper trading run for optimizer ${PAPER_OPTIMIZER_RUN_ID}`,
   });
   paperRunId = paperRun.id;
   console.log(`[paperRunner] Created paper run: ${paperRunId}`);

@@ -98,6 +98,8 @@ PAPER_OPTIMIZER_RUN_ID=uuid-from-optimizer_runs
 PAPER_BALANCE_START=1000
 PAPER_POLL_SECONDS=15
 PAPER_SAFE_LAG_MIN=1
+PAPER_RUN_MODE=continuous  # continuous|batch
+PAPER_REFRESH_CONFIGS=false  # true to refresh configs on start
 
 # Symbol
 SYMBOL=BTC-PERPETUAL
