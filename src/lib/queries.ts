@@ -83,6 +83,18 @@ export interface DailyPnL {
   winrate: number
 }
 
+export interface WeeklyPnL {
+  week_start: string
+  run_id: string
+  symbol: string
+  timeframe_min: number
+  pnl_total: number
+  trades: number
+  wins: number
+  losses: number
+  winrate: number
+}
+
 export interface TradeReasonStat {
   run_id: string
   paper_config_id: string
@@ -198,6 +210,17 @@ export async function getDailyPnL(runId: string): Promise<DailyPnL[]> {
     .select('*')
     .eq('run_id', runId)
     .order('day', { ascending: true })
+
+  if (error) throw error
+  return data || []
+}
+
+export async function getWeeklyPnL(runId: string): Promise<WeeklyPnL[]> {
+  const { data, error } = await supabase
+    .from('v_weekly_pnl')
+    .select('*')
+    .eq('run_id', runId)
+    .order('week_start', { ascending: true })
 
   if (error) throw error
   return data || []

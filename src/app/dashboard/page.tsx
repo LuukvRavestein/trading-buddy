@@ -8,6 +8,7 @@ import Link from 'next/link'
 import { RunSelector } from '@/components/RunSelector'
 import { KpiCard } from '@/components/KpiCard'
 import { PnlChart } from '@/components/PnlChart'
+import { WeeklyPnlChart } from '@/components/WeeklyPnlChart'
 import { StrategyTable } from '@/components/StrategyTable'
 import { TradeReasonTable } from '@/components/TradeReasonTable'
 import { getRunOverview, getStrategyPerformance, getTradeReasonStats, type RunOverview, type StrategyPerformance, type TradeReasonStat } from '@/lib/queries'
@@ -158,6 +159,11 @@ export default function DashboardPage() {
             {/* Daily PnL Chart */}
             <div className="mb-8">
               <PnlChart runId={selectedRunId} />
+            </div>
+
+            {/* Weekly PnL Chart */}
+            <div className="mb-8">
+              <WeeklyPnlChart runId={selectedRunId} />
             </div>
 
             {/* Strategy Performance Table */}
