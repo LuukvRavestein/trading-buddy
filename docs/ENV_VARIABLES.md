@@ -139,6 +139,43 @@ MAX_TRADES_PER_DAY=5
 
 ---
 
+## 🧰 Render Setup (Ingest + Paper)
+
+Voor live paper trading op Render gebruiken we **twee** background workers.
+
+### Worker A - Candle Ingest
+
+**Start Command:** `node src/jobs/candleIngest.mjs`
+
+```
+SUPABASE_URL=...
+SUPABASE_SERVICE_ROLE_KEY=...
+DERIBIT_CLIENT_ID=...
+DERIBIT_CLIENT_SECRET=...
+DERIBIT_ENV=live
+SYMBOL=BTC-PERPETUAL
+INGEST_TIMEFRAMES=1,5,15
+INGEST_POLL_SECONDS=15
+```
+
+### Worker B - Paper Trade Runner
+
+**Start Command:** `node src/jobs/paperTradeRunner.mjs`
+
+```
+SUPABASE_URL=...
+SUPABASE_SERVICE_ROLE_KEY=...
+SYMBOL=BTC-PERPETUAL
+PAPER_OPTIMIZER_RUN_ID=uuid-from-optimizer_runs
+PAPER_BALANCE_START=1000
+PAPER_POLL_SECONDS=15
+PAPER_SAFE_LAG_MIN=1
+```
+
+> `PAPER_TIMEFRAME_MIN` wordt genegeerd en altijd 1m gebruikt zodat 1m/5m/15m synchroon lopen.
+
+---
+
 ## 🔧 Vercel Setup
 
 ### Stap 1: Ga naar Environment Variables

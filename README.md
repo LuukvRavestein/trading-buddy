@@ -46,20 +46,22 @@ De bot bestaat uit 5 lagen:
    - **Client ID**
    - **Client Secret**
 
-### 4. Render Background Worker Setup
+### 4. Render Background Workers (Ingest + Paper)
 
+Voor live paper trading gebruiken we **twee** Render background workers:
+
+**Worker A - Candle Ingest**
 1. Ga naar [render.com](https://render.com) en maak een account aan
 2. Klik op **New** → **Background Worker**
 3. Verbind je GitHub repository
 4. Configureer:
-   - **Name**: `trading-buddy-worker`
+   - **Name**: `trading-buddy-ingest`
    - **Environment**: `Node`
-   - **Build Command**: (leeg laten - geen build nodig)
-   - **Start Command**: `npm start`
+   - **Build Command**: (leeg laten)
+   - **Start Command**: `node src/jobs/candleIngest.mjs`
    - **Plan**: Free tier is voldoende voor testing
 
-5. Voeg **Environment Variables** toe:
-
+**Environment Variables (Ingest):**
 ```bash
 # Supabase
 SUPABASE_URL=https://xxxxx.supabase.co
@@ -68,39 +70,47 @@ SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 # Deribit
 DERIBIT_CLIENT_ID=your_client_id
 DERIBIT_CLIENT_SECRET=your_client_secret
-DERIBIT_ENV=live  # 'live' voor mainnet (aanbevolen), 'test' voor testnet
+DERIBIT_ENV=live  # 'live' voor mainnet, 'test' voor testnet
 
-# Bot Configuration
-BOT_MODE=paper  # of 'live' voor live trading
+# Ingest
 SYMBOL=BTC-PERPETUAL
-TIMEFRAMES=1,5,15,60  # minuten
-POLL_INTERVAL_SECONDS=60
-
-# Risk Management
-MAX_RISK_PERCENT=1
-MAX_DAILY_LOSS_PERCENT=3
-MAX_TRADES_PER_DAY=5
-MAX_SL_PCT=0.6
-MIN_RR=2
-
-# Strategy Configuration
-MIN_RISK_PCT=0.1  # Minimum risk percentage (0.1%)
-TARGET_RR=2.0  # Target risk/reward ratio
-ATR_SL_MULTIPLIER=0.2  # ATR multiplier for stop loss buffer
-PROPOSAL_DUPLICATE_WINDOW_MIN=10  # Minutes to prevent duplicate proposals
-
-# Paper Trading Configuration
-PROPOSAL_TTL_MIN=10  # Minutes before proposal expires
-INTRABAR_TIEBREAK=worst  # 'worst' or 'best' when TP/SL hit in same candle
-PAPER_MAX_LOOKAHEAD_CANDLES=2000  # Max candles to scan for exits
-PAPER_STATS_ENABLED=1  # Enable daily stats calculation (1 or 0)
-
-# Logging
-LOG_LEVEL=info  # debug, info, warn, error
+INGEST_TIMEFRAMES=1,5,15  # minutes
+INGEST_POLL_SECONDS=15
 ```
 
-6. Klik **Create Background Worker**
-7. De worker start automatisch na deployment
+**Worker B - Paper Trade Runner**
+1. Klik op **New** → **Background Worker**
+2. Verbind dezelfde repo
+3. Configureer:
+   - **Name**: `trading-buddy-paper`
+   - **Environment**: `Node`
+   - **Build Command**: (leeg laten)
+   - **Start Command**: `node src/jobs/paperTradeRunner.mjs`
+
+**Environment Variables (Paper Runner):**
+```bash
+# Supabase
+SUPABASE_URL=https://xxxxx.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# Paper Trading
+PAPER_OPTIMIZER_RUN_ID=uuid-from-optimizer_runs
+PAPER_BALANCE_START=1000
+PAPER_POLL_SECONDS=15
+PAPER_SAFE_LAG_MIN=1
+
+# Symbol
+SYMBOL=BTC-PERPETUAL
+
+# Optional tuning
+PAPER_TOP_N=10
+PAPER_MIN_TRADES_BEFORE_KILL=50
+PAPER_KILL_MAX_DD_PCT=12
+PAPER_KILL_MIN_PF=0.8
+PAPER_KILL_MIN_PNL_PCT=-2
+```
+
+> Note: `PAPER_TIMEFRAME_MIN` wordt genegeerd en altijd 1m gebruikt zodat 1m/5m/15m synchroon lopen.
 
 ## 📊 Monitoring
 
