@@ -100,6 +100,8 @@ PAPER_POLL_SECONDS=15
 PAPER_SAFE_LAG_MIN=1
 PAPER_RUN_MODE=continuous  # continuous|batch
 PAPER_REFRESH_CONFIGS=false  # true to refresh configs on start
+PAPER_HEALTH_CANDLE_LAG_MIN=5  # warn if candle lag exceeds minutes
+PAPER_HEALTH_NO_TRADE_MIN=120  # warn if no trades for minutes
 
 # Symbol
 SYMBOL=BTC-PERPETUAL

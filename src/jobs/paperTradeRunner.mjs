@@ -47,6 +47,8 @@ const PAPER_RUN_RESUME_STATUSES = (process.env.PAPER_RUN_RESUME_STATUSES || 'run
   .map(s => s.trim())
   .filter(Boolean);
 const PAPER_REFRESH_CONFIGS = ['true', '1', 'yes'].includes((process.env.PAPER_REFRESH_CONFIGS || '').toLowerCase());
+const PAPER_HEALTH_CANDLE_LAG_MIN = parseInt(process.env.PAPER_HEALTH_CANDLE_LAG_MIN || '5', 10);
+const PAPER_HEALTH_NO_TRADE_MIN = parseInt(process.env.PAPER_HEALTH_NO_TRADE_MIN || '120', 10);
 
 const REQUIRED_TIMEFRAMES = [1, 5, 15];
 
@@ -636,6 +638,7 @@ async function pollLoop(ctx) {
   const { paperRunId } = ctx;
   let lastLeaderboardTime = 0;
   let lastHealthLogMs = 0;
+  let lastTradeActivityMs = Date.now();
   
   try {
     while (!shouldStop) {
@@ -700,6 +703,27 @@ async function pollLoop(ctx) {
             lagByTf[`${tf}m`] = Math.round((nowMs - maxTsMsByTf[tf]) / 1000);
           }
           console.log('[paperRunner] Data lag (seconds):', lagByTf);
+          
+          const candleLagMin = (nowMs - maxTsMsByTf[1]) / 60_000;
+          if (Number.isFinite(candleLagMin) && candleLagMin > PAPER_HEALTH_CANDLE_LAG_MIN) {
+            await logEvent({
+              runId: paperRunId,
+              level: 'warn',
+              message: `Candle lag exceeds threshold (${candleLagMin.toFixed(1)}m > ${PAPER_HEALTH_CANDLE_LAG_MIN}m)`,
+              payload: { candleLagMin, thresholdMin: PAPER_HEALTH_CANDLE_LAG_MIN, maxTs: toIso(maxTsMsByTf[1]) },
+            });
+          }
+          
+          const noTradeMin = (nowMs - lastTradeActivityMs) / 60_000;
+          if (Number.isFinite(noTradeMin) && noTradeMin > PAPER_HEALTH_NO_TRADE_MIN) {
+            await logEvent({
+              runId: paperRunId,
+              level: 'warn',
+              message: `No trades opened/closed for ${Math.round(noTradeMin)} minutes`,
+              payload: { noTradeMin, thresholdMin: PAPER_HEALTH_NO_TRADE_MIN },
+            });
+          }
+          
           lastHealthLogMs = nowMs;
         }
         
@@ -993,6 +1017,10 @@ async function pollLoop(ctx) {
           tradesOpened: totalTradesOpened,
           tradesClosed: totalTradesClosed,
         });
+        
+        if (totalTradesOpened + totalTradesClosed > 0) {
+          lastTradeActivityMs = Date.now();
+        }
         
         // Leaderboard every minute
         const now = Date.now();
