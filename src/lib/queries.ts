@@ -95,6 +95,16 @@ export interface WeeklyPnL {
   winrate: number
 }
 
+export interface PaperEvent {
+  id: string
+  run_id: string
+  paper_config_id: string | null
+  ts: string
+  level: 'info' | 'warn' | 'error'
+  message: string
+  payload: any
+}
+
 export interface TradeReasonStat {
   run_id: string
   paper_config_id: string
@@ -278,6 +288,23 @@ export async function getTradeReasonStatsAll(minTrades = 5): Promise<TradeReason
     .gte('trades', minTrades)
     .order('pnl_total', { ascending: false })
 
+  if (error) throw error
+  return data || []
+}
+
+export async function getPaperHealthEvents(runId: string, limit = 10): Promise<PaperEvent[]> {
+  const query = supabase
+    .from('paper_events')
+    .select('*')
+    .in('level', ['warn', 'error'])
+    .order('ts', { ascending: false })
+    .limit(limit)
+
+  if (runId !== 'all') {
+    query.eq('run_id', runId)
+  }
+
+  const { data, error } = await query
   if (error) throw error
   return data || []
 }

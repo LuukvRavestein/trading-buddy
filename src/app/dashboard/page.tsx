@@ -11,13 +11,15 @@ import { PnlChart } from '@/components/PnlChart'
 import { WeeklyPnlChart } from '@/components/WeeklyPnlChart'
 import { StrategyTable } from '@/components/StrategyTable'
 import { TradeReasonTable } from '@/components/TradeReasonTable'
-import { getRunOverview, getRunOverviewAll, getStrategyPerformance, getTradeReasonStats, getTradeReasonStatsAll, type RunOverview, type StrategyPerformance, type TradeReasonStat } from '@/lib/queries'
+import { HealthWarnings } from '@/components/HealthWarnings'
+import { getRunOverview, getRunOverviewAll, getStrategyPerformance, getTradeReasonStats, getTradeReasonStatsAll, getPaperHealthEvents, type RunOverview, type StrategyPerformance, type TradeReasonStat, type PaperEvent } from '@/lib/queries'
 
 export default function DashboardPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [runOverview, setRunOverview] = useState<RunOverview | null>(null)
   const [strategies, setStrategies] = useState<StrategyPerformance[]>([])
   const [reasonStats, setReasonStats] = useState<TradeReasonStat[]>([])
+  const [healthEvents, setHealthEvents] = useState<PaperEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -26,6 +28,7 @@ export default function DashboardPage() {
       setRunOverview(null)
       setStrategies([])
       setReasonStats([])
+      setHealthEvents([])
       setLoading(false)
       return
     }
@@ -39,22 +42,26 @@ export default function DashboardPage() {
         if (!runId) return
         
         if (runId === 'all') {
-          const [overview, reasons] = await Promise.all([
+          const [overview, reasons, events] = await Promise.all([
             getRunOverviewAll(),
             getTradeReasonStatsAll(5),
+            getPaperHealthEvents('all', 10),
           ])
           setRunOverview(overview)
           setStrategies([])
           setReasonStats(reasons)
+          setHealthEvents(events)
         } else {
-          const [overview, strategyData, reasons] = await Promise.all([
+          const [overview, strategyData, reasons, events] = await Promise.all([
             getRunOverview(runId),
             getStrategyPerformance(runId),
             getTradeReasonStats(runId, 5),
+            getPaperHealthEvents(runId, 10),
           ])
           setRunOverview(overview)
           setStrategies(strategyData)
           setReasonStats(reasons)
+          setHealthEvents(events)
         }
       } catch (err) {
         console.error('Failed to load dashboard data:', err)
@@ -194,6 +201,12 @@ export default function DashboardPage() {
             <div className="mb-8">
               <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100">Trade Reason Stats</h2>
               <TradeReasonTable stats={reasonStats} />
+            </div>
+
+            {/* Health Warnings */}
+            <div className="mb-8">
+              <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100">Health Warnings</h2>
+              <HealthWarnings events={healthEvents} />
             </div>
           </>
         ) : (
