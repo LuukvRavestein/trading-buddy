@@ -29,7 +29,8 @@ import { normalizeISO, addMinutesISO } from '../utils/time.mjs';
 
 // Configuration from env
 const SYMBOL = process.env.SYMBOL || 'BTC-PERPETUAL';
-const PAPER_TIMEFRAME_MIN = parseInt(process.env.PAPER_TIMEFRAME_MIN || '1', 10);
+const REQUESTED_PAPER_TIMEFRAME_MIN = parseInt(process.env.PAPER_TIMEFRAME_MIN || '1', 10);
+const PAPER_TIMEFRAME_MIN = 1;
 const PAPER_BALANCE_START = parseFloat(process.env.PAPER_BALANCE_START || '1000', 10);
 const PAPER_TOP_N = parseInt(process.env.PAPER_TOP_N || '10', 10);
 const PAPER_OPTIMIZER_RUN_ID = process.env.PAPER_OPTIMIZER_RUN_ID;
@@ -40,6 +41,12 @@ const PAPER_KILL_MIN_PF = parseFloat(process.env.PAPER_KILL_MIN_PF || '0.8', 10)
 const PAPER_KILL_MIN_PNL_PCT = parseFloat(process.env.PAPER_KILL_MIN_PNL_PCT || '-2', 10);
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
 const PAPER_RUN_ID = process.env.PAPER_RUN_ID; // Optional: resume existing run
+
+const REQUIRED_TIMEFRAMES = [1, 5, 15];
+
+if (REQUESTED_PAPER_TIMEFRAME_MIN !== PAPER_TIMEFRAME_MIN) {
+  console.warn(`[paperRunner] PAPER_TIMEFRAME_MIN=${REQUESTED_PAPER_TIMEFRAME_MIN} ignored; using ${PAPER_TIMEFRAME_MIN}m base for live multi-timeframe trading`);
+}
 
 // Parse PAPER_SAFE_LAG_MIN with validation
 function parseSafeLagMin() {
@@ -543,6 +550,7 @@ async function initPaperRunAndAccounts() {
 async function pollLoop(ctx) {
   const { paperRunId } = ctx;
   let lastLeaderboardTime = 0;
+  let lastHealthLogMs = 0;
   
   try {
     while (!shouldStop) {
@@ -556,29 +564,59 @@ async function pollLoop(ctx) {
           break;
         }
         
-        // Compute maxTs and safeEndTs
+        // Compute maxTs and safeEndTs across required timeframes
         // maxTs always points to last CLOSED candle (ingest ensures this)
-        const maxTs = await getMaxCandleTs({ symbol: SYMBOL, timeframeMin: PAPER_TIMEFRAME_MIN });
-        
-        if (!maxTs) {
-          console.warn('[paperRunner] No candles in database, waiting...');
+        const maxTsByTf = {};
+        for (const tf of REQUIRED_TIMEFRAMES) {
+          maxTsByTf[tf] = await getMaxCandleTs({ symbol: SYMBOL, timeframeMin: tf });
+        }
+
+        if (REQUIRED_TIMEFRAMES.some(tf => !maxTsByTf[tf])) {
+          console.warn('[paperRunner] Missing candles for one or more timeframes, waiting...', {
+            missing: REQUIRED_TIMEFRAMES.filter(tf => !maxTsByTf[tf]),
+          });
           await sleep(PAPER_POLL_SECONDS * 1000);
           continue;
         }
-        
-        // Convert maxTs to milliseconds and round down to minute boundary
-        const maxTsMs = roundDownToMinuteMs(toMs(maxTs));
-        if (maxTsMs === null) {
-          console.error('[paperRunner] Invalid maxTs, skipping iteration');
+
+        const maxTsMsByTf = {};
+        let invalidMaxTs = false;
+        for (const tf of REQUIRED_TIMEFRAMES) {
+          const ms = roundDownToMinuteMs(toMs(maxTsByTf[tf]));
+          if (ms === null) {
+            console.error(`[paperRunner] Invalid maxTs for ${tf}m, skipping iteration`);
+            invalidMaxTs = true;
+            break;
+          }
+          maxTsMsByTf[tf] = ms;
+        }
+        if (invalidMaxTs) {
           await sleep(PAPER_POLL_SECONDS * 1000);
           continue;
         }
-        
-        // Compute safeEndMs using PAPER_SAFE_LAG_MIN
+
+        const safeEndMsByTf = {};
+        for (const tf of REQUIRED_TIMEFRAMES) {
+          const tfMs = tf * 60_000;
+          const safeLagMs = PAPER_SAFE_LAG_MIN * tfMs;
+          safeEndMsByTf[tf] = maxTsMsByTf[tf] - safeLagMs;
+        }
+
+        const safeEndMs = Math.min(...Object.values(safeEndMsByTf));
+        const safeEndTs = toIso(safeEndMs);
         const timeframeMs = PAPER_TIMEFRAME_MIN * 60_000;
         const safeLagMs = PAPER_SAFE_LAG_MIN * timeframeMs;
-        const safeEndMs = maxTsMs - safeLagMs;
-        const safeEndTs = toIso(safeEndMs);
+
+        // Health logging (lag per timeframe)
+        const nowMs = Date.now();
+        if (nowMs - lastHealthLogMs >= 60_000) {
+          const lagByTf = {};
+          for (const tf of REQUIRED_TIMEFRAMES) {
+            lagByTf[`${tf}m`] = Math.round((nowMs - maxTsMsByTf[tf]) / 1000);
+          }
+          console.log('[paperRunner] Data lag (seconds):', lagByTf);
+          lastHealthLogMs = nowMs;
+        }
         
         // Cap last_candle_ts on load (resume safety)
         for (const account of activeAccounts) {
@@ -624,8 +662,8 @@ async function pollLoop(ctx) {
         
         // Log loop start (debug with numeric ms + iso)
         console.log('[paperRunner] Loop start:', {
-          maxTs: toIso(maxTsMs),
-          maxTsMs,
+          maxTsByTf: Object.fromEntries(REQUIRED_TIMEFRAMES.map(tf => [tf, toIso(maxTsMsByTf[tf])])),
+          maxTsMsByTf,
           safeEndTs,
           safeEndMs,
           safeLagMin: PAPER_SAFE_LAG_MIN,
