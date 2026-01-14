@@ -11,6 +11,7 @@ const DATA_SOURCE_CHART = 'chart_data';
 let dataSource = null;
 let oneMinuteCandles = new Map(); // symbol -> Map<timestamp, candle>
 let candleCallbacks = new Map(); // timeframe -> callback
+let aggregatedCandles = new Map(); // storageKey -> { startTs, candle }
 
 /**
  * Set active data source
@@ -112,16 +113,37 @@ function aggregateToTimeframes(symbol, oneMinuteCandle) {
     const timeframeMs = timeframeMin * 60 * 1000;
     const higherTimeframeTimestamp = Math.floor(oneMinuteCandle.t / timeframeMs) * timeframeMs;
 
-    // Get or create aggregated candle storage
     const storageKey = `${symbol}_${timeframeMin}`;
     if (!candleCallbacks.has(storageKey)) {
       continue; // No callback registered for this timeframe
     }
 
-    // This is a simplified version - in production you'd want to store
-    // partial candles and aggregate them properly
-    // For now, we'll just pass through 1m candles as-is
-    // TODO: Implement proper aggregation logic
+    const existing = aggregatedCandles.get(storageKey);
+    if (!existing || higherTimeframeTimestamp > existing.startTs) {
+      if (existing) {
+        emitCandle(symbol, timeframeMin, existing.candle);
+      }
+
+      aggregatedCandles.set(storageKey, {
+        startTs: higherTimeframeTimestamp,
+        candle: {
+          t: higherTimeframeTimestamp,
+          o: oneMinuteCandle.o,
+          h: oneMinuteCandle.h,
+          l: oneMinuteCandle.l,
+          c: oneMinuteCandle.c,
+          v: oneMinuteCandle.v,
+        },
+      });
+      continue;
+    }
+
+    if (higherTimeframeTimestamp === existing.startTs) {
+      existing.candle.h = Math.max(existing.candle.h, oneMinuteCandle.h);
+      existing.candle.l = Math.min(existing.candle.l, oneMinuteCandle.l);
+      existing.candle.c = oneMinuteCandle.c;
+      existing.candle.v += oneMinuteCandle.v;
+    }
   }
 }
 

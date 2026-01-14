@@ -242,8 +242,7 @@ export async function initializeWebSocketFallback() {
       processTrade(trade, SYMBOL);
     });
 
-    // Register callback to save completed 1m candles to Supabase
-    onCandleComplete(SYMBOL, 1, async (candleData) => {
+    const saveCandleFromWS = async (candleData) => {
       try {
         const supabaseCandle = {
           symbol: candleData.symbol,
@@ -258,11 +257,16 @@ export async function initializeWebSocketFallback() {
         };
         
         await upsertCandles([supabaseCandle]);
-        console.log(`[ingest] Saved 1m candle from WebSocket: ${supabaseCandle.ts}`);
+        console.log(`[ingest] Saved ${candleData.timeframeMin}m candle from WebSocket: ${supabaseCandle.ts}`);
       } catch (error) {
         console.error('[ingest] Error saving WebSocket candle:', error);
       }
-    });
+    };
+
+    // Register callbacks for completed candles (1m + aggregated higher TFs)
+    for (const timeframeMin of TIMEFRAMES) {
+      onCandleComplete(SYMBOL, timeframeMin, saveCandleFromWS);
+    }
 
     console.log(`[ingest] ✅ WebSocket fallback initialized for ${SYMBOL}`);
   } catch (error) {
