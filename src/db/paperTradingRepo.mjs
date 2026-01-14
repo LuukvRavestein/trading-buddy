@@ -546,6 +546,29 @@ export async function killConfig(paperConfigId, reason) {
 }
 
 /**
+ * Update paper config
+ *
+ * @param {string} paperConfigId - Paper config ID
+ * @param {object} updateData - Partial update (e.g., config JSON)
+ * @returns {Promise<object>} Updated config
+ */
+export async function updatePaperConfig(paperConfigId, updateData) {
+  if (!isSupabaseConfigured()) {
+    throw new Error('Supabase not configured');
+  }
+
+  try {
+    const result = await supabaseRequest('PATCH', `paper_configs?id=eq.${paperConfigId}`, updateData, {
+      select: '*',
+    });
+    return result[0] || null;
+  } catch (error) {
+    console.error('[paperRepo] Failed to update paper config:', error);
+    throw error;
+  }
+}
+
+/**
  * Log event
  * 
  * @param {object} options

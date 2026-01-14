@@ -5,6 +5,7 @@
 -- - v_strategy_performance: Performance metrics per strategy
 -- - v_run_overview: High-level overview per paper run
 -- - v_daily_pnl: Daily PnL aggregation
+-- - v_trade_reason_stats: Aggregated win/loss reasons from paper trades
 --
 -- Run this in Supabase SQL Editor:
 -- 1. Go to Supabase Dashboard → SQL Editor
@@ -186,6 +187,62 @@ INNER JOIN public.paper_runs r ON t.run_id = r.id
 WHERE t.closed_ts IS NOT NULL  -- Only closed trades for daily aggregation
 GROUP BY DATE(COALESCE(t.closed_ts, t.opened_ts)), t.run_id, r.symbol, r.timeframe_min;
 -- Note: Sort by day DESC, run_id in your queries for chronological order
+
+-- ============================================================================
+-- E) V_TRADE_REASON_STATS
+-- ============================================================================
+-- Aggregated trade reasons (entry/exit/trigger) with performance metrics
+CREATE OR REPLACE VIEW public.v_trade_reason_stats AS
+WITH base AS (
+  SELECT
+    t.run_id,
+    t.paper_config_id,
+    t.side,
+    COALESCE(t.meta->>'entry_reason', 'unknown') AS entry_reason,
+    COALESCE(t.meta->>'trigger_type', 'unknown') AS trigger_type,
+    COALESCE(t.meta->>'exit_reason', 'unknown') AS exit_reason,
+    t.result,
+    t.pnl_abs,
+    t.closed_ts
+  FROM public.paper_trades t
+  WHERE t.closed_ts IS NOT NULL
+)
+SELECT
+  b.run_id,
+  b.paper_config_id,
+  COALESCE(c.rank, -1) AS config_rank,
+  r.symbol,
+  r.timeframe_min,
+  b.side,
+  b.entry_reason,
+  b.trigger_type,
+  b.exit_reason,
+  COUNT(*) AS trades,
+  COUNT(*) FILTER (WHERE b.result = 'win') AS wins,
+  COUNT(*) FILTER (WHERE b.result = 'loss') AS losses,
+  COUNT(*) FILTER (WHERE b.result = 'breakeven') AS breakevens,
+  CASE
+    WHEN COUNT(*) > 0
+    THEN ROUND((COUNT(*) FILTER (WHERE b.result = 'win')::NUMERIC / COUNT(*)::NUMERIC) * 100, 2)
+    ELSE 0
+  END AS winrate,
+  COALESCE(SUM(b.pnl_abs), 0) AS pnl_total,
+  COALESCE(AVG(b.pnl_abs), 0) AS pnl_avg,
+  MIN(b.closed_ts) AS first_closed_ts,
+  MAX(b.closed_ts) AS last_closed_ts
+FROM base b
+INNER JOIN public.paper_configs c ON b.paper_config_id = c.id
+INNER JOIN public.paper_runs r ON b.run_id = r.id
+GROUP BY
+  b.run_id,
+  b.paper_config_id,
+  COALESCE(c.rank, -1),
+  r.symbol,
+  r.timeframe_min,
+  b.side,
+  b.entry_reason,
+  b.trigger_type,
+  b.exit_reason;
 
 -- ============================================================================
 -- INDEX RECOMMENDATIONS (as comments)

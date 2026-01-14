@@ -9,12 +9,14 @@ import { RunSelector } from '@/components/RunSelector'
 import { KpiCard } from '@/components/KpiCard'
 import { PnlChart } from '@/components/PnlChart'
 import { StrategyTable } from '@/components/StrategyTable'
-import { getRunOverview, getStrategyPerformance, type RunOverview, type StrategyPerformance } from '@/lib/queries'
+import { TradeReasonTable } from '@/components/TradeReasonTable'
+import { getRunOverview, getStrategyPerformance, getTradeReasonStats, type RunOverview, type StrategyPerformance, type TradeReasonStat } from '@/lib/queries'
 
 export default function DashboardPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [runOverview, setRunOverview] = useState<RunOverview | null>(null)
   const [strategies, setStrategies] = useState<StrategyPerformance[]>([])
+  const [reasonStats, setReasonStats] = useState<TradeReasonStat[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -22,6 +24,7 @@ export default function DashboardPage() {
     if (!selectedRunId) {
       setRunOverview(null)
       setStrategies([])
+      setReasonStats([])
       setLoading(false)
       return
     }
@@ -34,12 +37,14 @@ export default function DashboardPage() {
         const runId = selectedRunId
         if (!runId) return
         
-        const [overview, strategyData] = await Promise.all([
+        const [overview, strategyData, reasons] = await Promise.all([
           getRunOverview(runId),
           getStrategyPerformance(runId),
+          getTradeReasonStats(runId, 5),
         ])
         setRunOverview(overview)
         setStrategies(strategyData)
+        setReasonStats(reasons)
       } catch (err) {
         console.error('Failed to load dashboard data:', err)
         setError('Failed to load dashboard data')
@@ -159,6 +164,12 @@ export default function DashboardPage() {
             <div className="mb-8">
               <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100">Strategy Performance</h2>
               <StrategyTable strategies={strategies} runId={selectedRunId} />
+            </div>
+
+            {/* Trade Reason Stats */}
+            <div className="mb-8">
+              <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100">Trade Reason Stats</h2>
+              <TradeReasonTable stats={reasonStats} />
             </div>
           </>
         ) : (

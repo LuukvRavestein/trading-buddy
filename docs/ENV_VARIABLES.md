@@ -174,6 +174,27 @@ PAPER_SAFE_LAG_MIN=1
 
 > `PAPER_TIMEFRAME_MIN` wordt genegeerd en altijd 1m gebruikt zodat 1m/5m/15m synchroon lopen.
 
+### Worker C - Learning Report (optioneel)
+
+**Start Command:** `node src/jobs/learningReport.mjs`
+
+```
+SUPABASE_URL=...
+SUPABASE_SERVICE_ROLE_KEY=...
+REPORT_RUN_ID=optional-run-id
+REPORT_LOOKBACK_DAYS=7
+REPORT_MIN_TRADES=10
+REPORT_TOP_N=5
+
+# Auto-tune (default: false)
+REPORT_ENABLE_AUTO_TUNE=false
+REPORT_AUTOTUNE_MIN_TRADES=30
+REPORT_TARGET_WINRATE=55
+REPORT_RR_STEP=0.25
+REPORT_RR_MIN=1.5
+REPORT_RR_MAX=4.0
+```
+
 ---
 
 ## 🔧 Vercel Setup

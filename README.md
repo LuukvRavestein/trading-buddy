@@ -605,6 +605,7 @@ The dashboard uses SQL views from `supabase/migrations/010_dashboard_views.sql`:
 - `v_strategy_performance`: Performance metrics per strategy
 - `v_paper_journal`: Detailed trade journal
 - `v_daily_pnl`: Daily PnL aggregation
+- `v_trade_reason_stats`: Aggregated entry/exit reasons + outcomes
 
 Make sure to run the migration in Supabase SQL Editor before using the dashboard.
 
@@ -803,6 +804,31 @@ Het project is opgebouwd in fases:
 - Check of API keys correct zijn
 - Verify `DERIBIT_ENV` is correct (`test` of `live`)
 - Check Deribit API status
+
+## 🧠 Learning Report (optioneel)
+
+Een losse job die win/loss redenen aggregeert en (optioneel) kleine strategie‑aanpassingen doet op basis van performance.
+
+**Start Command:**
+```bash
+node src/jobs/learningReport.mjs
+```
+
+**Belangrijkste env vars:**
+```bash
+REPORT_RUN_ID=optional-run-id
+REPORT_LOOKBACK_DAYS=7
+REPORT_MIN_TRADES=10
+REPORT_TOP_N=5
+
+# Auto-tune (default: false)
+REPORT_ENABLE_AUTO_TUNE=false
+REPORT_AUTOTUNE_MIN_TRADES=30
+REPORT_TARGET_WINRATE=55
+REPORT_RR_STEP=0.25
+REPORT_RR_MIN=1.5
+REPORT_RR_MAX=4.0
+```
 
 ## 🤖 GitHub Issue → PR Automation
 

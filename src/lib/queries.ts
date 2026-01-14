@@ -83,6 +83,27 @@ export interface DailyPnL {
   winrate: number
 }
 
+export interface TradeReasonStat {
+  run_id: string
+  paper_config_id: string
+  config_rank: number
+  symbol: string
+  timeframe_min: number
+  side: 'long' | 'short'
+  entry_reason: string
+  trigger_type: string
+  exit_reason: string
+  trades: number
+  wins: number
+  losses: number
+  breakevens: number
+  winrate: number
+  pnl_total: number
+  pnl_avg: number
+  first_closed_ts: string | null
+  last_closed_ts: string | null
+}
+
 // Queries
 export async function getRunOverviews(): Promise<RunOverview[]> {
   const { data, error } = await supabase
@@ -177,6 +198,18 @@ export async function getDailyPnL(runId: string): Promise<DailyPnL[]> {
     .select('*')
     .eq('run_id', runId)
     .order('day', { ascending: true })
+
+  if (error) throw error
+  return data || []
+}
+
+export async function getTradeReasonStats(runId: string, minTrades = 5): Promise<TradeReasonStat[]> {
+  const { data, error } = await supabase
+    .from('v_trade_reason_stats')
+    .select('*')
+    .eq('run_id', runId)
+    .gte('trades', minTrades)
+    .order('pnl_total', { ascending: false })
 
   if (error) throw error
   return data || []
