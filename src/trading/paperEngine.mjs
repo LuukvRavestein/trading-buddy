@@ -214,23 +214,30 @@ export function updateEquityAndDD({ equity, maxEquity }) {
  * @param {number} options.markPrice - Current market price (candle close)
  * @returns {number} Mark-to-market equity
  */
-export function calculateMarkToMarketEquity({ balance, position, markPrice }) {
-  if (!position) {
+export function calculateMarkToMarketEquity({ balance, position, positions = null, markPrice }) {
+  let positionList = [];
+  if (positions) {
+    positionList = Array.isArray(positions) ? positions : Object.values(positions);
+  } else if (position) {
+    positionList = [position];
+  }
+  
+  const activePositions = positionList.filter(Boolean);
+  if (activePositions.length === 0) {
     return balance;
   }
   
-  const { side, entry, size } = position;
-  
-  // Calculate unrealized P&L
-  let unrealizedPnl;
-  if (side === 'long') {
-    unrealizedPnl = (markPrice - entry) * size;
-  } else {
-    unrealizedPnl = (entry - markPrice) * size;
+  let unrealizedTotal = 0;
+  for (const pos of activePositions) {
+    const { side, entry, size } = pos;
+    if (side === 'long') {
+      unrealizedTotal += (markPrice - entry) * size;
+    } else {
+      unrealizedTotal += (entry - markPrice) * size;
+    }
   }
   
-  // Equity = balance + unrealized P&L (fees already deducted from balance on open)
-  return balance + unrealizedPnl;
+  return balance + unrealizedTotal;
 }
 
 /**

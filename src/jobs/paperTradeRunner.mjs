@@ -190,29 +190,78 @@ async function loadCandlesPaged({ symbol, timeframeMin, startTs, endTs, pageSize
 /**
  * Process a candle for an account
  */
+function normalizeOpenPositions(openPosition) {
+  if (!openPosition) {
+    return { long: null, short: null };
+  }
+  
+  if (openPosition.long || openPosition.short) {
+    return {
+      long: openPosition.long || null,
+      short: openPosition.short || null,
+    };
+  }
+  
+  if (openPosition.side === 'long' || openPosition.side === 'short') {
+    return {
+      long: openPosition.side === 'long' ? openPosition : null,
+      short: openPosition.side === 'short' ? openPosition : null,
+    };
+  }
+  
+  return { long: null, short: null };
+}
+
+function serializeOpenPositions(positions) {
+  if (!positions?.long && !positions?.short) {
+    return null;
+  }
+  return {
+    long: positions.long || null,
+    short: positions.short || null,
+  };
+}
+
+function hasOpenPositions(openPosition) {
+  const positions = normalizeOpenPositions(openPosition);
+  return !!(positions.long || positions.short);
+}
+
 async function processCandleForAccount(account, candle, config, stateCache) {
   const { id: accountId, paper_config_id: configId, run_id: runId, balance, equity, max_equity, open_position } = account;
   
-  // Check for exit on open position
-  if (open_position) {
-    const exitResult = checkExitOnCandle(open_position, candle);
+  const positions = normalizeOpenPositions(open_position);
+  let newBalance = balance;
+  let winsCount = account.wins_count;
+  let lossesCount = account.losses_count;
+  let tradesCount = account.trades_count;
+  let closedAny = false;
+  
+  // Check for exits on open positions (long/short)
+  for (const side of ['long', 'short']) {
+    const position = positions[side];
+    if (!position) {
+      continue;
+    }
+    
+    const exitResult = checkExitOnCandle(position, candle);
     if (exitResult && exitResult.exit) {
-      // Close position
       const closeResult = closePosition({
-        position: open_position,
+        position,
         exitPrice: exitResult.exitPrice,
         slippageBps: config.slippage_bps || 2,
         takerFeeBps: config.taker_fee_bps || 5,
       });
       
-      // Update balance
-      const newBalance = balance + closeResult.pnlAbs;
+      newBalance += closeResult.pnlAbs;
+      tradesCount += 1;
+      if (closeResult.result === 'win') {
+        winsCount += 1;
+      } else if (closeResult.result === 'loss') {
+        lossesCount += 1;
+      }
       
-      // Update equity and DD
-      const equityUpdate = updateEquityAndDD({ equity: newBalance, maxEquity: max_equity });
-      
-      // Update trade in DB
-      const tradeId = open_position.trade_id; // Store trade_id in position
+      const tradeId = position.trade_id;
       if (tradeId) {
         await updateTradeClose(tradeId, {
           closed_ts: candle.ts,
@@ -221,167 +270,146 @@ async function processCandleForAccount(account, candle, config, stateCache) {
           pnl_abs: closeResult.pnlAbs,
           fees_abs: closeResult.feesAbs,
           result: closeResult.result,
+          meta: {
+            ...(position.meta || {}),
+            exit_reason: exitResult.reason,
+            exit_price: closeResult.exitPrice,
+            result: closeResult.result,
+          },
         });
       }
       
-      // Update account
-      const winsCount = closeResult.result === 'win' ? account.wins_count + 1 : account.wins_count;
-      const lossesCount = closeResult.result === 'loss' ? account.losses_count + 1 : account.losses_count;
+      positions[side] = null;
+      closedAny = true;
       
-      // Calculate profit factor
-      // TODO: Load all trades to calculate properly, for now use simple approximation
-      const profitFactor = calculateProfitFactor(
-        winsCount * 1.0, // Simplified
-        lossesCount * 1.0
-      );
-      
-      await upsertAccountCheckpoint({
-        id: accountId,
-        run_id: runId,
-        paper_config_id: configId,
-        balance: newBalance,
-        equity: equityUpdate.equity,
-        max_equity: equityUpdate.maxEquity,
-        max_drawdown_pct: equityUpdate.maxDrawdownPct,
-        open_position: null,
-        trades_count: account.trades_count + 1,
-        wins_count: winsCount,
-        losses_count: lossesCount,
-        profit_factor: profitFactor,
-        last_candle_ts: candle.ts,
-      });
-      
-      console.log(`[paperRunner] Trade closed: ${open_position.side} ${open_position.entry} -> ${closeResult.exitPrice} (${closeResult.pnlPct.toFixed(2)}%)`);
+      console.log(`[paperRunner] Trade closed: ${position.side} ${position.entry} -> ${closeResult.exitPrice} (${closeResult.pnlPct.toFixed(2)}%) [${exitResult.reason}]`);
       
       await logEvent({
         runId,
         paperConfigId: configId,
         level: 'info',
-        message: `Trade closed: ${open_position.side} ${open_position.entry} -> ${closeResult.exitPrice} (${closeResult.pnlPct.toFixed(2)}%)`,
-        payload: { result: closeResult.result, pnlPct: closeResult.pnlPct },
+        message: `Trade closed: ${position.side} ${position.entry} -> ${closeResult.exitPrice} (${closeResult.pnlPct.toFixed(2)}%) [${exitResult.reason}]`,
+        payload: { result: closeResult.result, pnlPct: closeResult.pnlPct, exit_reason: exitResult.reason },
       });
-      
-      // Return updated account
-      return {
-        ...account,
-        balance: newBalance,
-        equity: equityUpdate.equity,
-        max_equity: equityUpdate.maxEquity,
-        max_drawdown_pct: equityUpdate.maxDrawdownPct,
-        open_position: null,
-        trades_count: account.trades_count + 1,
-        wins_count: winsCount,
-        losses_count: lossesCount,
-        profit_factor: profitFactor,
-      };
-    } else {
-      // Update mark-to-market equity
-      const markEquity = calculateMarkToMarketEquity({
-        balance,
-        position: open_position,
-        markPrice: candle.c,
-      });
-      
-      const equityUpdate = updateEquityAndDD({ equity: markEquity, maxEquity: max_equity });
-      
-      await upsertAccountCheckpoint({
-        id: accountId,
-        run_id: runId,
-        paper_config_id: configId,
-        balance,
-        equity: equityUpdate.equity,
-        max_equity: equityUpdate.maxEquity,
-        max_drawdown_pct: equityUpdate.maxDrawdownPct,
-        open_position,
-        last_candle_ts: candle.ts,
-      });
-      
-      return {
-        ...account,
-        equity: equityUpdate.equity,
-        max_equity: equityUpdate.maxEquity,
-        max_drawdown_pct: equityUpdate.maxDrawdownPct,
-      };
     }
   }
+  
+  let openPositionsToStore = serializeOpenPositions(positions);
+  let markEquity = calculateMarkToMarketEquity({
+    balance: newBalance,
+    positions: [positions.long, positions.short].filter(Boolean),
+    markPrice: candle.c,
+  });
+  let equityUpdate = updateEquityAndDD({ equity: markEquity, maxEquity: max_equity });
+  let profitFactor = calculateProfitFactor(winsCount * 1.0, lossesCount * 1.0);
+  
+  const effectiveEquity = equityUpdate.equity;
   
   // Check for entry signal
   const signal = evaluateStrategy({ stateCache, candle, config });
   if (signal) {
-    // Open position
-    const position = openPosition({
+    if (positions[signal.direction]) {
+      await logEvent({
+        runId,
+        paperConfigId: configId,
+        level: 'info',
+        message: `Signal ignored: ${signal.direction} already open`,
+        payload: { direction: signal.direction, reason: signal.reason || null },
+      });
+      
+      // Fall through to checkpoint update below
+    } else {
+      // Open position
+      const position = openPosition({
       side: signal.direction,
       entry: signal.entry_price,
       sl: signal.stop_loss,
       tp: signal.take_profit,
       riskPct: config.min_risk_pct || 0.001,
-      equity,
+        equity: effectiveEquity,
       price: signal.entry_price,
       takerFeeBps: config.taker_fee_bps || 5,
       slippageBps: config.slippage_bps || 2,
-    });
-    
-    // Deduct fees from balance
-    const newBalance = balance - position.fees_paid;
-    
-    // Insert trade in DB
-    const trade = await insertTradeOpen({
-      run_id: runId,
-      paper_config_id: configId,
-      opened_ts: candle.ts,
-      side: position.side,
-      entry: position.entry,
-      size: position.size,
-      sl: position.sl,
-      tp: position.tp,
-    });
-    
-    // Store trade_id in position for later
-    position.trade_id = trade.id;
-    
-    // Update account
-    await upsertAccountCheckpoint({
-      id: accountId,
-      run_id: runId,
-      paper_config_id: configId,
-      balance: newBalance,
-      equity: newBalance, // Equity = balance when position just opened
-      open_position: position,
-      last_candle_ts: candle.ts,
-    });
-    
-    console.log(`[paperRunner] Trade opened: ${position.side} ${position.entry} (SL: ${position.sl}, TP: ${position.tp})`);
-    
-    await logEvent({
-      runId,
-      paperConfigId: configId,
-      level: 'info',
-      message: `Trade opened: ${position.side} ${position.entry} (SL: ${position.sl}, TP: ${position.tp})`,
-      payload: { entry: position.entry, sl: position.sl, tp: position.tp },
-    });
-    
-    return {
-      ...account,
-      balance: newBalance,
-      equity: newBalance,
-      open_position: position,
-    };
+      });
+      position.meta = {
+        entry_reason: signal.reason || null,
+        trigger_type: signal.trigger_type || null,
+      };
+      
+      // Deduct fees from balance
+      const newBalanceAfterFees = newBalance - position.fees_paid;
+      
+      // Insert trade in DB
+      const trade = await insertTradeOpen({
+        run_id: runId,
+        paper_config_id: configId,
+        opened_ts: candle.ts,
+        side: position.side,
+        entry: position.entry,
+        size: position.size,
+        sl: position.sl,
+        tp: position.tp,
+        meta: {
+          entry_reason: signal.reason || null,
+          trigger_type: signal.trigger_type || null,
+        },
+      });
+      
+      // Store trade_id in position for later
+      position.trade_id = trade.id;
+      positions[position.side] = position;
+      const updatedOpenPositions = serializeOpenPositions(positions);
+      
+      console.log(`[paperRunner] Trade opened: ${position.side} ${position.entry} (SL: ${position.sl}, TP: ${position.tp})`);
+      
+      await logEvent({
+        runId,
+        paperConfigId: configId,
+        level: 'info',
+        message: `Trade opened: ${position.side} ${position.entry} (SL: ${position.sl}, TP: ${position.tp})`,
+        payload: { entry: position.entry, sl: position.sl, tp: position.tp, reason: signal.reason || null },
+      });
+      
+      newBalance = newBalanceAfterFees;
+      openPositionsToStore = updatedOpenPositions;
+      markEquity = calculateMarkToMarketEquity({
+        balance: newBalance,
+        positions: [positions.long, positions.short].filter(Boolean),
+        markPrice: candle.c,
+      });
+      equityUpdate = updateEquityAndDD({ equity: markEquity, maxEquity: max_equity });
+    }
   }
   
-  // No signal, just update checkpoint
+  // Update checkpoint
   await upsertAccountCheckpoint({
     id: accountId,
     run_id: runId,
     paper_config_id: configId,
-    balance,
-    equity,
-    max_equity,
-    max_drawdown_pct: account.max_drawdown_pct,
-    open_position,
+    balance: newBalance,
+    equity: equityUpdate.equity,
+    max_equity: equityUpdate.maxEquity,
+    max_drawdown_pct: equityUpdate.maxDrawdownPct,
+    open_position: openPositionsToStore,
+    trades_count: tradesCount,
+    wins_count: winsCount,
+    losses_count: lossesCount,
+    profit_factor: profitFactor,
     last_candle_ts: candle.ts,
   });
   
-  return account;
+  return {
+    ...account,
+    balance: newBalance,
+    equity: equityUpdate.equity,
+    max_equity: equityUpdate.maxEquity,
+    max_drawdown_pct: equityUpdate.maxDrawdownPct,
+    open_position: openPositionsToStore,
+    trades_count: tradesCount,
+    wins_count: winsCount,
+    losses_count: lossesCount,
+    profit_factor: profitFactor,
+  };
 }
 
 /**
@@ -806,16 +834,16 @@ async function pollLoop(ctx) {
               
               try {
                 // Track if trade was opened/closed
-                const hadOpenPosition = !!account.open_position;
+                const hadOpenPosition = hasOpenPositions(account.open_position);
                 
                 // Process candle
                 const updatedAccount = await processCandleForAccount(account, candleObj, config, stateCache);
                 
                 // Track trades
-                if (!hadOpenPosition && updatedAccount.open_position) {
+                if (!hadOpenPosition && hasOpenPositions(updatedAccount.open_position)) {
                   accountTradesOpened++;
                 }
-                if (hadOpenPosition && !updatedAccount.open_position) {
+                if (hadOpenPosition && !hasOpenPositions(updatedAccount.open_position)) {
                   accountTradesClosed++;
                 }
                 

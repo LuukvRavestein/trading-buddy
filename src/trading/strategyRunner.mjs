@@ -177,12 +177,16 @@ export function evaluateStrategy({ stateCache, candle, config }) {
     return null;
   }
   
+  const reason = buildReason(direction, entryTrigger, state1m, state5m, state15m, state60m, config);
+
   return {
     direction,
     entry_price: entryPrice,
     stop_loss: stopLoss,
     take_profit: takeProfit,
     rr: config.rr_target,
+    reason,
+    trigger_type: entryTrigger.triggerType || null,
   };
 }
 
@@ -196,31 +200,31 @@ function determineDirection(state5m, state15m, state60m, config) {
   
   // Check 60m alignment if required
   if (config.require_60m_align && trend60m) {
-    if (primaryTrend === 'up' && trend60m !== 'up') return { direction: null };
-    if (primaryTrend === 'down' && trend60m !== 'down') return { direction: null };
+    if (primaryTrend === 'up' && trend60m !== 'up') return { direction: null, reason: '60m not aligned' };
+    if (primaryTrend === 'down' && trend60m !== 'down') return { direction: null, reason: '60m not aligned' };
   }
   
   // Check 5m alignment if required
   if (config.require_5m_align && primaryTrend && trend5m !== primaryTrend) {
-    return { direction: null };
+    return { direction: null, reason: '5m not aligned' };
   }
   
   // Default tolerant logic
   if (!primaryTrend || primaryTrend === 'chop') {
-    return { direction: null };
+    return { direction: null, reason: '15m trend not clear' };
   }
   
   if (primaryTrend === 'up') {
-    if (trend5m === 'down') return { direction: null };
-    return { direction: 'long' };
+    if (trend5m === 'down') return { direction: null, reason: '5m opposite trend' };
+    return { direction: 'long', reason: '15m up' };
   }
   
   if (primaryTrend === 'down') {
-    if (trend5m === 'up') return { direction: null };
-    return { direction: 'short' };
+    if (trend5m === 'up') return { direction: null, reason: '5m opposite trend' };
+    return { direction: 'short', reason: '15m down' };
   }
   
-  return { direction: null };
+  return { direction: null, reason: 'no direction' };
 }
 
 /**
@@ -262,6 +266,37 @@ function checkEntryTrigger(state1m, direction, candle, config) {
     triggered: primaryTrigger || fallbackTrigger,
     triggerType: primaryTrigger ? 'primary' : (fallbackTrigger ? 'fallback' : null),
   };
+}
+
+/**
+ * Build human-readable entry reason
+ */
+function buildReason(direction, entryTrigger, state1m, state5m, state15m, state60m, config) {
+  const parts = [];
+  const trend5m = state5m?.trend || 'n/a';
+  const trend15m = state15m?.trend || 'n/a';
+  const trend60m = state60m?.trend || null;
+  
+  parts.push(`${trend15m} 15m + ${trend5m} 5m`);
+  if (config.require_60m_align && trend60m) {
+    parts.push(`${trend60m} 60m`);
+  }
+  
+  if (entryTrigger.triggerType === 'primary') {
+    if (state1m.choch_direction === direction) {
+      parts.push(`1m CHoCH ${direction}`);
+    } else if (state1m.bos_direction === direction) {
+      parts.push(`1m BOS ${direction}`);
+    } else {
+      parts.push(`1m primary ${direction}`);
+    }
+  } else if (entryTrigger.triggerType === 'fallback') {
+    parts.push(`1m swing break ${direction}`);
+  } else {
+    parts.push(`1m trigger ${direction}`);
+  }
+  
+  return parts.join(' + ');
 }
 
 /**
