@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { getDailyPnL, type DailyPnL } from '@/lib/queries'
+import { getDailyPnL, getDailyPnLAll, type DailyPnL } from '@/lib/queries'
 
 interface PnlChartProps {
   runId: string | null
@@ -26,7 +26,7 @@ export function PnlChart({ runId }: PnlChartProps) {
         const id = runId
         if (!id) return
         
-        const dailyData = await getDailyPnL(id)
+        const dailyData = id === 'all' ? await getDailyPnLAll() : await getDailyPnL(id)
         setData(dailyData)
       } catch (error) {
         console.error('Failed to load daily PnL:', error)

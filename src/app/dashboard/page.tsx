@@ -11,7 +11,7 @@ import { PnlChart } from '@/components/PnlChart'
 import { WeeklyPnlChart } from '@/components/WeeklyPnlChart'
 import { StrategyTable } from '@/components/StrategyTable'
 import { TradeReasonTable } from '@/components/TradeReasonTable'
-import { getRunOverview, getStrategyPerformance, getTradeReasonStats, type RunOverview, type StrategyPerformance, type TradeReasonStat } from '@/lib/queries'
+import { getRunOverview, getRunOverviewAll, getStrategyPerformance, getTradeReasonStats, getTradeReasonStatsAll, type RunOverview, type StrategyPerformance, type TradeReasonStat } from '@/lib/queries'
 
 export default function DashboardPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
@@ -38,14 +38,24 @@ export default function DashboardPage() {
         const runId = selectedRunId
         if (!runId) return
         
-        const [overview, strategyData, reasons] = await Promise.all([
-          getRunOverview(runId),
-          getStrategyPerformance(runId),
-          getTradeReasonStats(runId, 5),
-        ])
-        setRunOverview(overview)
-        setStrategies(strategyData)
-        setReasonStats(reasons)
+        if (runId === 'all') {
+          const [overview, reasons] = await Promise.all([
+            getRunOverviewAll(),
+            getTradeReasonStatsAll(5),
+          ])
+          setRunOverview(overview)
+          setStrategies([])
+          setReasonStats(reasons)
+        } else {
+          const [overview, strategyData, reasons] = await Promise.all([
+            getRunOverview(runId),
+            getStrategyPerformance(runId),
+            getTradeReasonStats(runId, 5),
+          ])
+          setRunOverview(overview)
+          setStrategies(strategyData)
+          setReasonStats(reasons)
+        }
       } catch (err) {
         console.error('Failed to load dashboard data:', err)
         setError('Failed to load dashboard data')
@@ -137,21 +147,27 @@ export default function DashboardPage() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                 <div>
                   <div className="text-gray-500 dark:text-gray-400">Symbol</div>
-                  <div className="font-medium text-gray-900 dark:text-gray-100">{runOverview.symbol}</div>
+                  <div className="font-medium text-gray-900 dark:text-gray-100">
+                    {selectedRunId === 'all' ? 'All symbols' : runOverview.symbol}
+                  </div>
                 </div>
                 <div>
                   <div className="text-gray-500 dark:text-gray-400">Timeframe</div>
-                  <div className="font-medium text-gray-900 dark:text-gray-100">{runOverview.timeframe_min}m</div>
+                  <div className="font-medium text-gray-900 dark:text-gray-100">
+                    {selectedRunId === 'all' ? 'All' : `${runOverview.timeframe_min}m`}
+                  </div>
                 </div>
                 <div>
                   <div className="text-gray-500 dark:text-gray-400">Started</div>
                   <div className="font-medium text-gray-900 dark:text-gray-100">
-                    {new Date(runOverview.started_at).toLocaleDateString()}
+                    {runOverview.started_at ? new Date(runOverview.started_at).toLocaleDateString() : 'n/a'}
                   </div>
                 </div>
                 <div>
                   <div className="text-gray-500 dark:text-gray-400">Status</div>
-                  <div className="font-medium text-gray-900 dark:text-gray-100">{runOverview.status}</div>
+                  <div className="font-medium text-gray-900 dark:text-gray-100">
+                    {selectedRunId === 'all' ? 'aggregate' : runOverview.status}
+                  </div>
                 </div>
               </div>
             </div>
@@ -167,10 +183,12 @@ export default function DashboardPage() {
             </div>
 
             {/* Strategy Performance Table */}
-            <div className="mb-8">
-              <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100">Strategy Performance</h2>
-              <StrategyTable strategies={strategies} runId={selectedRunId} />
-            </div>
+            {selectedRunId !== 'all' && (
+              <div className="mb-8">
+                <h2 className="text-xl font-semibold mb-4 text-gray-900 dark:text-gray-100">Strategy Performance</h2>
+                <StrategyTable strategies={strategies} runId={selectedRunId} />
+              </div>
+            )}
 
             {/* Trade Reason Stats */}
             <div className="mb-8">

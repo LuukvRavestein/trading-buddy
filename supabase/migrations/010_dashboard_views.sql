@@ -7,6 +7,10 @@
 -- - v_daily_pnl: Daily PnL aggregation
 -- - v_trade_reason_stats: Aggregated win/loss reasons from paper trades
 -- - v_weekly_pnl: Weekly PnL aggregation
+-- - v_run_overview_all: Aggregated overview across all runs
+-- - v_daily_pnl_all: Daily PnL aggregation across all runs
+-- - v_weekly_pnl_all: Weekly PnL aggregation across all runs
+-- - v_trade_reason_stats_all: Aggregated trade reasons across all runs
 --
 -- Run this in Supabase SQL Editor:
 -- 1. Go to Supabase Dashboard → SQL Editor
@@ -268,6 +272,149 @@ FROM public.paper_trades t
 INNER JOIN public.paper_runs r ON t.run_id = r.id
 WHERE t.closed_ts IS NOT NULL
 GROUP BY DATE_TRUNC('week', COALESCE(t.closed_ts, t.opened_ts)), t.run_id, r.symbol, r.timeframe_min;
+
+-- ============================================================================
+-- G) AGGREGATED VIEWS (ALL RUNS)
+-- ============================================================================
+
+CREATE OR REPLACE VIEW public.v_run_overview_all AS
+WITH trade_stats AS (
+  SELECT
+    COUNT(*) AS trades_total,
+    COUNT(*) FILTER (WHERE result = 'win') AS wins_total,
+    SUM(pnl_abs) AS pnl_total
+  FROM public.paper_trades
+  WHERE closed_ts IS NOT NULL
+),
+open_positions AS (
+  SELECT COUNT(*) AS accounts_with_open_position
+  FROM public.paper_accounts
+  WHERE open_position IS NOT NULL
+),
+drawdown AS (
+  SELECT MAX(max_drawdown_pct) AS max_drawdown_pct_worst
+  FROM public.paper_accounts
+),
+equity AS (
+  SELECT SUM(equity) AS equity_sum
+  FROM public.paper_accounts
+),
+run_start AS (
+  SELECT MIN(started_at) AS started_at
+  FROM public.paper_runs
+)
+SELECT
+  'all'::TEXT AS run_id,
+  'ALL'::TEXT AS symbol,
+  0::INTEGER AS timeframe_min,
+  rs.started_at,
+  'aggregate'::TEXT AS status,
+  NULL::TEXT AS note,
+  COALESCE((SELECT COUNT(*) FROM public.paper_configs), 0) AS strategies,
+  COALESCE(ts.trades_total, 0) AS trades_total,
+  COALESCE(ts.pnl_total, 0) AS pnl_total,
+  CASE
+    WHEN COALESCE(ts.trades_total, 0) > 0
+    THEN ROUND((COALESCE(ts.wins_total, 0)::NUMERIC / ts.trades_total::NUMERIC) * 100, 2)
+    ELSE 0
+  END AS winrate_total,
+  NULL::INTEGER AS best_strategy_rank,
+  NULL::INTEGER AS worst_strategy_rank,
+  COALESCE(op.accounts_with_open_position, 0) AS accounts_with_open_position,
+  COALESCE(dd.max_drawdown_pct_worst, 0) AS max_drawdown_pct_worst,
+  COALESCE(eq.equity_sum, 0) AS equity_sum
+FROM trade_stats ts
+LEFT JOIN open_positions op ON true
+LEFT JOIN drawdown dd ON true
+LEFT JOIN equity eq ON true
+LEFT JOIN run_start rs ON true;
+
+CREATE OR REPLACE VIEW public.v_daily_pnl_all AS
+SELECT
+  DATE(COALESCE(t.closed_ts, t.opened_ts)) AS day,
+  'all'::TEXT AS run_id,
+  'ALL'::TEXT AS symbol,
+  0::INTEGER AS timeframe_min,
+  SUM(t.pnl_abs) AS pnl_total,
+  COUNT(*) AS trades,
+  COUNT(*) FILTER (WHERE t.result = 'win') AS wins,
+  COUNT(*) FILTER (WHERE t.result = 'loss') AS losses,
+  CASE
+    WHEN COUNT(*) > 0
+    THEN ROUND((COUNT(*) FILTER (WHERE t.result = 'win')::NUMERIC / COUNT(*)::NUMERIC) * 100, 2)
+    ELSE 0
+  END AS winrate
+FROM public.paper_trades t
+WHERE t.closed_ts IS NOT NULL
+GROUP BY DATE(COALESCE(t.closed_ts, t.opened_ts));
+
+CREATE OR REPLACE VIEW public.v_weekly_pnl_all AS
+SELECT
+  DATE_TRUNC('week', COALESCE(t.closed_ts, t.opened_ts))::DATE AS week_start,
+  'all'::TEXT AS run_id,
+  'ALL'::TEXT AS symbol,
+  0::INTEGER AS timeframe_min,
+  SUM(t.pnl_abs) AS pnl_total,
+  COUNT(*) AS trades,
+  COUNT(*) FILTER (WHERE t.result = 'win') AS wins,
+  COUNT(*) FILTER (WHERE t.result = 'loss') AS losses,
+  CASE
+    WHEN COUNT(*) > 0
+    THEN ROUND((COUNT(*) FILTER (WHERE t.result = 'win')::NUMERIC / COUNT(*)::NUMERIC) * 100, 2)
+    ELSE 0
+  END AS winrate
+FROM public.paper_trades t
+WHERE t.closed_ts IS NOT NULL
+GROUP BY DATE_TRUNC('week', COALESCE(t.closed_ts, t.opened_ts));
+
+CREATE OR REPLACE VIEW public.v_trade_reason_stats_all AS
+WITH base AS (
+  SELECT
+    'all'::TEXT AS run_id,
+    'all'::TEXT AS paper_config_id,
+    -1::INTEGER AS config_rank,
+    t.side,
+    COALESCE(t.meta->>'entry_reason', 'unknown') AS entry_reason,
+    COALESCE(t.meta->>'trigger_type', 'unknown') AS trigger_type,
+    COALESCE(t.meta->>'exit_reason', 'unknown') AS exit_reason,
+    t.result,
+    t.pnl_abs,
+    t.closed_ts
+  FROM public.paper_trades t
+  WHERE t.closed_ts IS NOT NULL
+)
+SELECT
+  b.run_id,
+  b.paper_config_id,
+  b.config_rank,
+  'ALL'::TEXT AS symbol,
+  0::INTEGER AS timeframe_min,
+  b.side,
+  b.entry_reason,
+  b.trigger_type,
+  b.exit_reason,
+  COUNT(*) AS trades,
+  COUNT(*) FILTER (WHERE b.result = 'win') AS wins,
+  COUNT(*) FILTER (WHERE b.result = 'loss') AS losses,
+  COUNT(*) FILTER (WHERE b.result = 'breakeven') AS breakevens,
+  CASE
+    WHEN COUNT(*) > 0
+    THEN ROUND((COUNT(*) FILTER (WHERE b.result = 'win')::NUMERIC / COUNT(*)::NUMERIC) * 100, 2)
+    ELSE 0
+  END AS winrate,
+  COALESCE(SUM(b.pnl_abs), 0) AS pnl_total,
+  COALESCE(AVG(b.pnl_abs), 0) AS pnl_avg,
+  MIN(b.closed_ts) AS first_closed_ts,
+  MAX(b.closed_ts) AS last_closed_ts
+FROM base b
+GROUP BY
+  b.run_id,
+  b.paper_config_id,
+  b.config_rank,
+  b.side,
+  b.entry_reason,
+  b.trigger_type,
+  b.exit_reason;
 
 -- ============================================================================
 -- INDEX RECOMMENDATIONS (as comments)

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
-import { getWeeklyPnL, type WeeklyPnL } from '@/lib/queries'
+import { getWeeklyPnL, getWeeklyPnLAll, type WeeklyPnL } from '@/lib/queries'
 
 interface WeeklyPnlChartProps {
   runId: string | null
@@ -24,7 +24,7 @@ export function WeeklyPnlChart({ runId }: WeeklyPnlChartProps) {
         setLoading(true)
         const id = runId
         if (!id) return
-        const weeklyData = await getWeeklyPnL(id)
+        const weeklyData = id === 'all' ? await getWeeklyPnLAll() : await getWeeklyPnL(id)
         setData(weeklyData)
       } catch (error) {
         console.error('Failed to load weekly PnL:', error)

@@ -17,8 +17,8 @@ export function RunSelector({ selectedRunId, onRunChange }: RunSelectorProps) {
       try {
         const data = await getRunOverviews()
         setRuns(data)
-        if (data.length > 0 && !selectedRunId) {
-          onRunChange(data[0].run_id)
+        if (!selectedRunId) {
+          onRunChange('all')
         }
       } catch (error) {
         console.error('Failed to load runs:', error)
@@ -44,7 +44,7 @@ export function RunSelector({ selectedRunId, onRunChange }: RunSelectorProps) {
         onChange={(e) => onRunChange(e.target.value || null)}
         className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
       >
-        <option value="">Select a run</option>
+        <option value="all">All runs (aggregate)</option>
         {runs.map((run) => (
           <option key={run.run_id} value={run.run_id}>
             {run.symbol} - {new Date(run.started_at).toLocaleDateString()} ({run.status})

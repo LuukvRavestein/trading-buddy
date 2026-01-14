@@ -141,6 +141,19 @@ export async function getRunOverview(runId: string): Promise<RunOverview | null>
   return data
 }
 
+export async function getRunOverviewAll(): Promise<RunOverview | null> {
+  const { data, error } = await supabase
+    .from('v_run_overview_all')
+    .select('*')
+    .single()
+
+  if (error) {
+    if (error.code === 'PGRST116') return null
+    throw error
+  }
+  return data
+}
+
 export async function getStrategyPerformance(runId: string): Promise<StrategyPerformance[]> {
   const { data, error } = await supabase
     .from('v_strategy_performance')
@@ -215,6 +228,16 @@ export async function getDailyPnL(runId: string): Promise<DailyPnL[]> {
   return data || []
 }
 
+export async function getDailyPnLAll(): Promise<DailyPnL[]> {
+  const { data, error } = await supabase
+    .from('v_daily_pnl_all')
+    .select('*')
+    .order('day', { ascending: true })
+
+  if (error) throw error
+  return data || []
+}
+
 export async function getWeeklyPnL(runId: string): Promise<WeeklyPnL[]> {
   const { data, error } = await supabase
     .from('v_weekly_pnl')
@@ -226,11 +249,32 @@ export async function getWeeklyPnL(runId: string): Promise<WeeklyPnL[]> {
   return data || []
 }
 
+export async function getWeeklyPnLAll(): Promise<WeeklyPnL[]> {
+  const { data, error } = await supabase
+    .from('v_weekly_pnl_all')
+    .select('*')
+    .order('week_start', { ascending: true })
+
+  if (error) throw error
+  return data || []
+}
+
 export async function getTradeReasonStats(runId: string, minTrades = 5): Promise<TradeReasonStat[]> {
   const { data, error } = await supabase
     .from('v_trade_reason_stats')
     .select('*')
     .eq('run_id', runId)
+    .gte('trades', minTrades)
+    .order('pnl_total', { ascending: false })
+
+  if (error) throw error
+  return data || []
+}
+
+export async function getTradeReasonStatsAll(minTrades = 5): Promise<TradeReasonStat[]> {
+  const { data, error } = await supabase
+    .from('v_trade_reason_stats_all')
+    .select('*')
     .gte('trades', minTrades)
     .order('pnl_total', { ascending: false })
 
